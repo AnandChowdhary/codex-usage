@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# Run by .github/workflows/release.yml after it tags a release.
+version: 2
+
+project_name: codex-usage
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # No version in the name, so .../releases/latest/download/<name> always
+    # points at the newest build.
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: git
+  abbrev: 7
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Other changes
+      order: 999
+  filters:
+    exclude:
+      - '^.*?(docs|test|ci|chore|style|build)(\(.+\))??!?:.+$'
+
+release:
+  name_template: "{{ .Tag }}"
+  footer: |
+    ## Install
+
+    Download the archive for your platform below, or from a terminal:
+
+    ```sh
+    # macOS on Apple silicon; see the table for other platforms
+    curl -fsSL https://github.com/AnandChowdhary/codex-usage/releases/download/{{ .Tag }}/codex-usage_darwin_arm64.tar.gz | tar -xz codex-usage
+    sudo mv codex-usage /usr/local/bin/
+    ```
+
+    | Platform | Archive |
+    |---|---|
+    | macOS, Apple silicon | `codex-usage_darwin_arm64.tar.gz` |
+    | macOS, Intel | `codex-usage_darwin_amd64.tar.gz` |
+    | Linux, x86-64 | `codex-usage_linux_amd64.tar.gz` |
+    | Linux, ARM64 | `codex-usage_linux_arm64.tar.gz` |
+    | Windows, x86-64 | `codex-usage_windows_amd64.zip` |
+    | Windows, ARM64 | `codex-usage_windows_arm64.zip` |
+
+    With Go: `go install github.com/AnandChowdhary/codex-usage@{{ .Tag }}`

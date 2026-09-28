@@ -34,16 +34,33 @@ side@proton.me  plus  64%      4h02m   90%          Thu 18:10
 
 ## Install
 
+Download a ready-to-use binary from the
+[latest release](https://github.com/AnandChowdhary/codex-usage/releases/latest),
+or from a terminal:
+
 ```sh
-go install github.com/AnandChowdhary/codex-usage@latest
+# macOS on Apple silicon; swap the archive name for other platforms
+curl -fsSL https://github.com/AnandChowdhary/codex-usage/releases/latest/download/codex-usage_darwin_arm64.tar.gz | tar -xz codex-usage
+sudo mv codex-usage /usr/local/bin/
 ```
 
-This needs Go 1.24 or newer. To build from source instead:
+| Platform | Archive |
+|---|---|
+| macOS, Apple silicon | `codex-usage_darwin_arm64.tar.gz` |
+| macOS, Intel | `codex-usage_darwin_amd64.tar.gz` |
+| Linux, x86-64 | `codex-usage_linux_amd64.tar.gz` |
+| Linux, ARM64 | `codex-usage_linux_arm64.tar.gz` |
+| Windows, x86-64 | `codex-usage_windows_amd64.zip` |
+| Windows, ARM64 | `codex-usage_windows_arm64.zip` |
+
+The binaries aren't signed. If macOS blocks one downloaded with a browser, run
+`xattr -d com.apple.quarantine codex-usage`. Downloads with `curl` aren't
+affected.
+
+With Go 1.24 or newer:
 
 ```sh
-git clone https://github.com/AnandChowdhary/codex-usage
-cd codex-usage
-go build -o codex-usage .
+go install github.com/AnandChowdhary/codex-usage@latest
 ```
 
 ## Quick start
@@ -297,6 +314,25 @@ response shapes.
 ```sh
 go test -race ./...
 ```
+
+### Releases
+
+Every push to `main` that passes CI is released automatically
+([release.yml](.github/workflows/release.yml)). The version comes from the
+[conventional commit](https://www.conventionalcommits.org) prefixes since the
+last release:
+
+| Commits | Release |
+|---|---|
+| `feat: …` | minor, `0.1.0` → `0.2.0` |
+| `fix: …`, `perf: …`, `refactor: …` or no prefix | patch, `0.1.0` → `0.1.1` |
+| `feat!: …` or a `BREAKING CHANGE:` footer | major (minor before 1.0) |
+| only `docs:`, `test:`, `ci:`, `chore:`, `style:`, `build:` | no release |
+
+[GoReleaser](https://goreleaser.com) then builds the binaries and publishes
+the GitHub release, with a changelog grouped into features and fixes. To
+release on demand, or to force a particular bump, run the Release workflow
+from the Actions tab.
 
 The tests run every command against a fake auth server and ChatGPT backend,
 so no network access is needed. To point a real build at other servers, use:
