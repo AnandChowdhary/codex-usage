@@ -1,0 +1,6 @@
+/codex-usage
+/dist/
+*.test
+*.out
+.env
+.context/
