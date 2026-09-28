@@ -26,6 +26,7 @@ type jsonAccount struct {
 	SpendLimitReached    bool              `json:"spend_limit_reached,omitempty"`
 	ResetCredits         *jsonResetCredits `json:"rate_limit_reset_credits,omitempty"`
 	NeedsRelogin         bool              `json:"needs_relogin,omitempty"`
+	InCodex              bool              `json:"in_codex,omitempty"`
 	Warning              string            `json:"warning,omitempty"`
 	Error                string            `json:"error,omitempty"`
 }
@@ -75,12 +76,14 @@ type jsonCredits struct {
 func (e *env) usageJSON(results []result) jsonUsage {
 	now := e.Now()
 	out := jsonUsage{FetchedAt: formatRFC3339(now), Accounts: []jsonAccount{}}
+	inCodex := e.codexKey()
 	for _, r := range results {
 		acct := jsonAccount{
 			Label:     r.account.Label,
 			Email:     r.account.Email,
 			Plan:      r.account.PlanType,
 			AccountID: r.account.AccountID,
+			InCodex:   r.account.Key() == inCodex,
 		}
 		if _, ok := r.err.(*reloginError); ok {
 			acct.NeedsRelogin = true

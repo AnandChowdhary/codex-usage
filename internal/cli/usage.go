@@ -108,11 +108,11 @@ func (e *env) collect(ctx context.Context, include func(store.Account) bool) ([]
 			stale[acct.Key()] = acct.Tokens.AccessToken
 		}
 	}
-	var refreshErrs map[string]error
-	if len(stale) > 0 {
-		if f, refreshErrs, err = e.refresh(ctx, stale, false); err != nil {
-			return nil, err
-		}
+	// Always go through refresh, even with nothing stale, so the account
+	// shared with Codex is reconciled with auth.json.
+	f, refreshErrs, err := e.refresh(ctx, stale, false)
+	if err != nil {
+		return nil, err
 	}
 
 	accounts := selected(f)
@@ -207,7 +207,8 @@ func (e *env) fetch(ctx context.Context, results []result, idx []int) {
 // caller saw) while holding the accounts lock, saving after each one because
 // refresh tokens rotate. Without force, accounts another process refreshed
 // meanwhile are skipped; with force, accounts whose access token changed are.
-// It returns the updated file and per-account refresh errors.
+// Before and after, the account shared with Codex is reconciled with
+// auth.json. It returns the updated file and per-account refresh errors.
 func (e *env) refresh(ctx context.Context, targets map[string]string, force bool) (*store.File, map[string]error, error) {
 	unlock, err := e.store.Lock(ctx)
 	if err != nil {
@@ -217,6 +218,13 @@ func (e *env) refresh(ctx context.Context, targets map[string]string, force bool
 	f, err := e.store.Load()
 	if err != nil {
 		return nil, nil, err
+	}
+	if changed, err := e.reconcileCodex(f); err != nil {
+		return nil, nil, err
+	} else if changed {
+		if err := e.store.Save(f); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	now := e.Now()
@@ -268,7 +276,18 @@ func (e *env) refresh(ctx context.Context, targets map[string]string, force bool
 		}(i, acct.Key(), acct.Tokens.RefreshToken)
 	}
 	wg.Wait()
-	return f, errs, saveErr
+	if saveErr != nil {
+		return nil, nil, saveErr
+	}
+	// Hand any refreshed tokens of the shared account on to Codex.
+	if changed, err := e.reconcileCodex(f); err != nil {
+		return nil, nil, err
+	} else if changed {
+		if err := e.store.Save(f); err != nil {
+			return nil, nil, err
+		}
+	}
+	return f, errs, nil
 }
 
 func needsRefresh(acct store.Account, now time.Time) bool {

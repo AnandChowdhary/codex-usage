@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/AnandChowdhary/codex-usage/internal/auth"
+	"github.com/AnandChowdhary/codex-usage/internal/codexauth"
 	"github.com/AnandChowdhary/codex-usage/internal/store"
 	"github.com/AnandChowdhary/codex-usage/internal/usage"
 )
@@ -33,6 +34,8 @@ Usage:
   codex-usage login [--label NAME] [--open]  Sign in to an account with a device code
   codex-usage accounts [--json]              List signed-in accounts
   codex-usage redeem <label|email> [--yes]   Use a usage limit reset on an account
+  codex-usage switch [<label|email>]         Make Codex use an account (or show which it uses)
+  codex-usage rotate [--dry-run]             Switch Codex to the account with the most usage left
   codex-usage logout <label|email>           Sign out and forget an account
   codex-usage version                        Print the version
 
@@ -126,6 +129,10 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.runLogout(ctx, args)
 	case "redeem":
 		err = a.runRedeem(ctx, args)
+	case "switch":
+		err = a.runSwitch(ctx, args)
+	case "rotate":
+		err = a.runRotate(ctx, args)
 	default:
 		fmt.Fprintf(a.Stderr, "codex-usage: unknown command %q\n\n%s", cmd, helpText)
 		return 2
@@ -160,6 +167,7 @@ type env struct {
 	store *store.Store
 	auth  *auth.Client
 	usage *usage.Client
+	codex codexauth.Home
 }
 
 func (a *App) newEnv(configPath string) (*env, error) {
@@ -169,8 +177,13 @@ func (a *App) newEnv(configPath string) (*env, error) {
 			return nil, err
 		}
 	}
+	codex, err := codexauth.DefaultHome(a.Getenv)
+	if err != nil {
+		return nil, err
+	}
 	userAgent := "codex-usage/" + a.Version
 	return &env{
+		codex: codex,
 		App:   a,
 		store: &store.Store{Path: configPath},
 		auth:  auth.NewClient(a.Getenv(AuthBaseURLEnvVar), a.HTTPClient, userAgent),

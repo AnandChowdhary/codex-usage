@@ -18,11 +18,7 @@ side@proton.me       plus   -        -          -            -             re-lo
 
 ## Non-goals (for now)
 
-- Starting Codex sessions, or switching the account the Codex CLI uses.
-- Importing `~/.codex/auth.json`. Refresh tokens rotate and are single-use.
-  If this tool and the Codex CLI shared one refresh token, whichever refreshed
-  second would get `refresh_token_reused` and be logged out. Every account
-  here gets its own device-code session.
+- Starting Codex sessions.
 - API-key accounts. Usage limits only apply to ChatGPT-plan logins.
 - OS keychain storage. Planned for v2 (see `TODO.md`); v1 matches Codex's
   plaintext `auth.json` model.
@@ -34,6 +30,8 @@ side@proton.me       plus   -        -          -            -             re-lo
 | `codex-usage` / `codex-usage usage` | Fetch usage for all stored accounts concurrently and print a table. `--json` prints raw, normalized JSON. Exits non-zero if any account failed. |
 | `codex-usage login [--label NAME] [--open]` | Run the device-code flow, then add or update the account. The label defaults to the email. `--open` also launches the browser. |
 | `codex-usage accounts` | List stored accounts (label, email, plan, workspace, last refresh). No network calls. |
+| `codex-usage switch [<label\|email>] [--force]` | Sign the Codex CLI in to the account, or show which one it uses (see §5). |
+| `codex-usage rotate [--dry-run] [--force]` | Switch Codex to the account with the most usage left (see §5). |
 | `codex-usage redeem <label\|email> [--credit ID] [--yes]` | Use a usage limit reset after confirming (see §4). |
 | `codex-usage logout <label\|email>` | Revoke the refresh token (best effort) and remove the account. |
 | `codex-usage --version` | Print the version. |
@@ -192,6 +190,64 @@ limits; it's the "Redeem reset" item in Codex's `/usage` menu.
     the chosen reset (or any reset) isn't available.
   - Default to the available reset that expires first. Always ask for
     confirmation unless `--yes` is passed. Show usage again afterwards.
+
+### 5. Switching the Codex CLI's account
+
+`switch <account>` and `rotate` hand an account's session to the Codex CLI.
+This is based on how Codex stores and reloads its sign-in (`codex-rs/login`,
+`storage.rs` and `manager.rs`):
+
+- Codex keeps its sign-in in `$CODEX_HOME/auth.json` (default `~/.codex`)
+  unless `cli_auth_credentials_store` in `config.toml` says `keyring`,
+  `auto` or `ephemeral`. We only support file storage and refuse otherwise.
+  Only top-level keys are checked.
+- `codex login` writes:
+  `{"auth_mode": "chatgpt", "OPENAI_API_KEY": null, "tokens": {"id_token", "access_token", "refresh_token", "account_id"}, "last_refresh"}`.
+  We write the same, atomically, with mode `0600`. Without `auth_mode`, a
+  file with `OPENAI_API_KEY` means API-key mode.
+- **Before every refresh, Codex rereads auth.json.**
+  - Same account, changed tokens: Codex adopts them and skips its own refresh.
+  - Different account: the running process refuses to refresh ("signed in to
+    another account"). That's why running sessions must be restarted after a
+    switch.
+  - Nothing watches the file, so a running session keeps its cached access
+    token until then.
+
+**Shared session.** The switched-to account is marked `in_codex`. It shares
+one session (one refresh-token family) with `auth.json`. Refresh tokens
+rotate, so the two copies must never diverge:
+
+- Every run reconciles them under the accounts lock, before and after
+  refreshing. The copy whose access token expires later wins (falling back
+  to `last_refresh`), and it's written to the other side. When we push to
+  `auth.json`, fields we don't know about are kept.
+- If `auth.json` can't be parsed (Codex rewrites it in place), we skip that
+  run instead of guessing.
+- If `auth.json` holds a different account, or is gone, the flag is cleared.
+  Our copy may be stale in that case; a later refresh then reports
+  `refresh_token_reused` and the account asks to sign in again.
+
+**Replacing Codex's sign-in.**
+- Codex's current account is reconciled first.
+- If Codex is on an account we don't have, it's added (so switching back
+  works).
+- Any other kind of sign-in (API key, unreadable file) needs `--force`, and
+  the current file is copied to `~/.codex-usage/codex-auth.backup.json`
+  first.
+- If Codex is already on the target account through its own `codex login`,
+  we adopt whichever session is newer.
+
+`logout` never revokes the session of the account Codex is using, because
+that would sign Codex out too.
+
+**rotate.**
+- Score every account that was checked successfully, isn't blocked or at its
+  spend limit, and reports at least one window. The score is `min(left
+  percent)` across its windows.
+- Switch to the highest score. Ties keep the stored order.
+- If none qualify, fail and name the accounts that have usage limit resets.
+- The score is a percentage, so a Pro and a Plus plan with the same
+  percentage left rank equally, even though Pro's limits are larger.
 
 ## Storage
 

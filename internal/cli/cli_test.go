@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/AnandChowdhary/codex-usage/internal/auth"
+	"github.com/AnandChowdhary/codex-usage/internal/codexauth"
 	"github.com/AnandChowdhary/codex-usage/internal/store"
 )
 
@@ -154,15 +155,21 @@ func usageBody(plan string, primaryUsed, secondaryUsed float64, extra string) st
 }
 
 type harness struct {
-	t       *testing.T
-	backend *backend
-	path    string
-	opened  []string
-	stdin   string
+	t         *testing.T
+	backend   *backend
+	path      string
+	codexHome string
+	opened    []string
+	stdin     string
 }
 
 func newHarness(t *testing.T) *harness {
-	return &harness{t: t, backend: newBackend(t), path: filepath.Join(t.TempDir(), "accounts.json")}
+	return &harness{
+		t:         t,
+		backend:   newBackend(t),
+		path:      filepath.Join(t.TempDir(), "accounts.json"),
+		codexHome: filepath.Join(t.TempDir(), "codex"),
+	}
 }
 
 func (h *harness) run(args ...string) (stdout, stderr string, code int) {
@@ -180,6 +187,8 @@ func (h *harness) run(args ...string) (stdout, stderr string, code int) {
 				return h.backend.srv.URL + "/backend-api"
 			case store.HomeEnvVar:
 				return filepath.Dir(h.path)
+			case codexauth.HomeEnvVar:
+				return h.codexHome
 			}
 			return ""
 		},

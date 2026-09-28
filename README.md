@@ -21,8 +21,9 @@ side@proton.me  plus  64%      4h02m   90%          Thu 18:10
 - **Multiple accounts.** Add as many ChatGPT accounts and workspaces as you like.
 - **Codex's own sign-in.** It uses Codex's device-code flow: open a link, type
   a code, done. This tool never sees your password, and there are no API keys.
-- **Doesn't touch your Codex login.** Every account gets its own session, and
-  `~/.codex/auth.json` is never read or changed.
+- **Switch Codex between accounts.** `switch` signs the Codex CLI in to any of
+  your accounts, and `rotate` picks the one with the most usage left. Codex's
+  login is only changed when you run one of these commands.
 - **Usage limit resets.** It shows which accounts have earned resets and when
   they expire. `codex-usage redeem` uses one without opening Codex.
 - **Fast.** All accounts are checked in parallel, and expiring sign-ins are
@@ -91,6 +92,8 @@ codex-usage
 | `codex-usage login --open` | Also open the sign-in page in your browser. |
 | `codex-usage accounts` | List signed-in accounts and whether they're still valid. Add `--json` for JSON. |
 | `codex-usage redeem <label\|email>` | Use one of the account's usage limit resets, after confirming. See [Usage limit resets](#usage-limit-resets). |
+| `codex-usage switch <label\|email>` | Sign the Codex CLI in to this account. Without an account, it shows which one Codex uses. See [Switching Codex between accounts](#switching-codex-between-accounts). |
+| `codex-usage rotate` | Switch Codex to the account with the most usage left. `--dry-run` only shows the choice. |
 | `codex-usage logout <label\|email>` | End an account's session and remove it. |
 | `codex-usage version` | Print the version. |
 
@@ -139,6 +142,42 @@ Use a usage limit reset on work? This clears its current usage limits and can't 
 - If the account's usage doesn't need a reset, ChatGPT says so and the
   command exits with status 1.
 
+### Switching Codex between accounts
+
+`switch` signs the Codex CLI in to one of your accounts. When one account runs
+out, `rotate` moves Codex to whichever account has the most usage left:
+
+```
+$ codex-usage rotate
+✓ Switched Codex from work to side (side@example.com, plus): 60% left in the 5h window.
+Running Codex sessions (CLI, IDE extension, app) keep using the previous account until you restart them.
+
+$ codex-usage switch work
+✓ Switched Codex from side to work (work@acme.com, pro).
+```
+
+- **Restart Codex after switching.** Running sessions keep using the previous
+  account until they're restarted.
+- The usage table marks the account Codex is using with `(codex)`.
+  `codex-usage switch` without an account prints it.
+- `rotate` scores each account by the share left in its tightest window. For
+  example, 90% of the 5h window but 30% of the week counts as 30%. Accounts
+  that have hit a limit are skipped. If no account has usage left, it tells
+  you which accounts have a [usage limit reset](#usage-limit-resets).
+- **Nothing is lost.** If Codex is signed in to an account that codex-usage
+  doesn't have, it's saved before being replaced, so you can switch back to
+  it.
+- **Codex and codex-usage share one session per account.** Whenever either
+  side renews it, codex-usage copies the newer tokens to the other side. This
+  way neither side is left holding a refresh token that's already been spent.
+  Running `codex-usage logout` on the account Codex is using doesn't end
+  Codex's session.
+- **It needs Codex's default file storage.** It doesn't work with
+  `cli_auth_credentials_store = "keyring"` or `"auto"`.
+- **API-key sign-ins are protected.** If Codex is signed in with an API key,
+  `switch` refuses to replace it. With `--force` it replaces it and keeps a
+  backup at `~/.codex-usage/codex-auth.backup.json`.
+
 ### JSON
 
 ```sh
@@ -153,6 +192,7 @@ codex-usage --json | jq -r '.accounts[] | "\(.label): \([.rate_limit.windows[]? 
       "label": "work",
       "email": "work@acme.com",
       "plan": "pro",
+      "in_codex": true,
       "rate_limit": {
         "allowed": true,
         "limit_reached": false,
@@ -218,6 +258,9 @@ sequenceDiagram
         CLI->>API: POST /backend-api/wham/rate-limit-reset-credits/consume
         API-->>CLI: reset / nothing_to_reset / no_credit
     end
+    opt codex-usage switch / rotate
+        Note over CLI: write the account's session to ~/.codex/auth.json
+    end
 ```
 
 - **Refresh tokens are single-use.** A new token replaces the old one each
@@ -233,8 +276,8 @@ response shapes.
 
 > [!IMPORTANT]
 > These are private, undocumented OpenAI endpoints. They may change or stop
-> working without notice. `codex-usage` only reads usage for accounts you sign
-> in to yourself.
+> working without notice. `codex-usage` only acts on accounts you sign in to
+> yourself.
 
 ## Storage and security
 
@@ -243,7 +286,10 @@ response shapes.
 - The file contains sign-in tokens, like Codex's own `auth.json`. It's created
   with mode `0600` (only you can read it) in a `0700` directory, and written
   atomically.
-- `logout` removes the account and also revokes its session with OpenAI.
+- `logout` removes the account and also revokes its session with OpenAI. The
+  exception is the account Codex is using: its session is left alone.
+- `switch` and `rotate` write `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`)
+  the same way `codex login` does, with mode `0600`.
 - OS keychain storage is planned for v2 (see [TODO.md](TODO.md)).
 
 ## Development
@@ -265,6 +311,7 @@ main.go              entry point
 internal/cli/        commands, table and JSON output
 internal/auth/       device-code login, token refresh and revocation, JWT claims
 internal/store/      accounts.json with atomic writes and cross-process locking
+internal/codexauth/  the Codex CLI's auth.json, for switch and rotate
 internal/usage/      /wham/usage and usage limit reset client, response types
 ```
 

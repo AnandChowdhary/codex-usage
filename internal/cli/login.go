@@ -119,10 +119,12 @@ func (a *App) runAccounts(args []string) error {
 			AccountID    string `json:"chatgpt_account_id,omitempty"`
 			LastRefresh  string `json:"last_refresh,omitempty"`
 			NeedsRelogin bool   `json:"needs_relogin"`
+			InCodex      bool   `json:"in_codex,omitempty"`
 		}
 		out := struct {
 			Accounts []account `json:"accounts"`
 		}{Accounts: []account{}}
+		inCodex := e.codexKey()
 		for _, acct := range f.Accounts {
 			out.Accounts = append(out.Accounts, account{
 				Label:        acct.Label,
@@ -132,6 +134,7 @@ func (a *App) runAccounts(args []string) error {
 				AccountID:    acct.AccountID,
 				LastRefresh:  formatRFC3339(acct.LastRefresh),
 				NeedsRelogin: acct.NeedsRelogin,
+				InCodex:      acct.Key() == inCodex,
 			})
 		}
 		return writeJSON(e.Stdout, out)
@@ -144,13 +147,14 @@ func (a *App) runAccounts(args []string) error {
 	st := e.styles()
 	t := &table{header: []string{"LABEL", "EMAIL", "PLAN", "WORKSPACE", "LAST REFRESH", "STATUS"}}
 	now := e.Now()
+	inCodex := e.codexKey()
 	for _, acct := range f.Accounts {
 		status := cell{text: "ok", style: st.good}
 		if acct.NeedsRelogin {
 			status = cell{text: "sign in again", style: st.bad}
 		}
 		t.rows = append(t.rows, []cell{
-			{text: acct.Label},
+			{text: codexLabel(acct.Label, acct.Key() == inCodex)},
 			{text: orDash(acct.Email)},
 			{text: orDash(acct.PlanType)},
 			{text: orDash(shortID(acct.AccountID)), style: st.dim},
@@ -180,6 +184,11 @@ func (a *App) runLogout(ctx context.Context, args []string) error {
 	removed, err := e.removeAccount(ctx, positional[0])
 	if err != nil {
 		return err
+	}
+	if removed.InCodex || e.codexKey() == removed.Key() {
+		// Revoking could end the session Codex is using too.
+		fmt.Fprintf(e.Stdout, "Removed %s. Codex is still signed in to it; use `codex logout` to sign Codex out.\n", describe(removed))
+		return nil
 	}
 	if removed.Tokens.RefreshToken != "" {
 		if err := e.auth.Revoke(ctx, removed.Tokens.RefreshToken); err != nil {

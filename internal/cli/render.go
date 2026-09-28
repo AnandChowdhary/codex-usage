@@ -134,6 +134,7 @@ func (e *env) renderUsage(results []result, all bool) {
 	}
 	t := &table{header: append(header, "NOTES")}
 
+	inCodex := e.codexKey()
 	for _, r := range results {
 		plan := r.account.PlanType
 		var limit *usage.RateLimit
@@ -143,7 +144,7 @@ func (e *env) renderUsage(results []result, all bool) {
 				plan = r.usage.PlanType
 			}
 		}
-		row := []cell{{text: r.account.Label}, {text: orDash(plan)}}
+		row := []cell{{text: codexLabel(r.account.Label, r.account.Key() == inCodex)}, {text: orDash(plan)}}
 		row = append(row, e.windowCells(limit, lengths, now)...)
 		t.rows = append(t.rows, append(row, e.notes(r, st, now)))
 
@@ -323,6 +324,14 @@ func formatRFC3339(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// codexLabel marks the account the Codex CLI is signed in to.
+func codexLabel(label string, inCodex bool) string {
+	if inCodex {
+		return label + " (codex)"
+	}
+	return label
 }
 
 func orDash(s string) string {

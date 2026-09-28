@@ -7,6 +7,9 @@
       `accounts.json`. Leave only non-secret metadata in the file, and fall back
       to the file where no keychain is available. v1 stores tokens in plaintext
       with mode `0600`, like Codex's own `auth.json`.
+- [ ] **`switch` with Codex's keyring storage.** Support
+      `cli_auth_credentials_store = "keyring"`/`"auto"`: service `Codex Auth`,
+      account `cli|<first 16 hex chars of sha256(canonical CODEX_HOME)>`.
 
 ## Later
 

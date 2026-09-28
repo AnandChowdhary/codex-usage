@@ -36,6 +36,10 @@ type Account struct {
 	LastRefresh  time.Time   `json:"last_refresh"`
 	AddedAt      time.Time   `json:"added_at"`
 	NeedsRelogin bool        `json:"needs_relogin,omitempty"`
+	// InCodex marks the account whose session was handed to the Codex CLI
+	// with `switch`. Codex's auth.json then holds the same session, and the
+	// newer copy wins whenever they differ.
+	InCodex bool `json:"in_codex,omitempty"`
 }
 
 // Key identifies the account across logins. One user can sign in to several
