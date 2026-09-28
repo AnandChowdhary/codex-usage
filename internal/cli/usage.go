@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	noAccountsMessage = "No accounts yet. Run `codex-usage login` to add one."
+	noAccountsMessage = "No accounts yet. Run `codex-usage login` to add a Codex account, or `codex-usage claude login <profile>` for Claude Code."
 
 	// Refresh an access token this long before it expires.
 	refreshMargin = 5 * time.Minute
@@ -39,6 +39,7 @@ type result struct {
 	resets  *usage.ResetCredits
 	err     error
 	warning error
+	notes   []string
 }
 
 func (a *App) runUsage(ctx context.Context, args []string) error {
@@ -58,27 +59,56 @@ func (a *App) runUsage(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// Codex accounts and Claude Code profiles are checked at the same time.
+	var claudeResults []claudeResult
+	var claudeErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		claudeResults, claudeErr = e.collectClaude(ctx)
+	}()
 	results, err := e.collect(ctx, nil)
+	<-done
 	if err != nil {
 		return err
 	}
-	if len(results) == 0 && !*asJSON {
+	if claudeErr != nil {
+		return claudeErr
+	}
+	if len(results) == 0 && len(claudeResults) == 0 && !*asJSON {
 		fmt.Fprintln(e.Stderr, noAccountsMessage)
 		return nil
 	}
 	if *asJSON {
-		if err := writeJSON(e.Stdout, e.usageJSON(results)); err != nil {
+		if err := writeJSON(e.Stdout, e.usageJSON(results, claudeResults)); err != nil {
 			return err
 		}
-	} else {
+	} else if len(claudeResults) == 0 {
 		e.renderUsage(results, *all)
+	} else {
+		st := e.styles()
+		if len(results) > 0 {
+			fmt.Fprintln(e.Stdout, st.bold("Codex"))
+			e.renderUsage(results, *all)
+			fmt.Fprintln(e.Stdout)
+		}
+		fmt.Fprintln(e.Stdout, st.bold("Claude Code"))
+		e.renderTable(claudeRows(claudeResults), *all, e.claudeLabeler())
 	}
-	for _, r := range results {
+	for _, r := range append(results, claudeRows(claudeResults)...) {
 		if r.err != nil {
 			return exitError(1)
 		}
 	}
 	return nil
+}
+
+func claudeRows(results []claudeResult) []result {
+	out := make([]result, len(results))
+	for i, r := range results {
+		out[i] = r.result
+	}
+	return out
 }
 
 // collect refreshes stale sign-ins and fetches usage for the accounts that

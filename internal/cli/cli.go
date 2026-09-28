@@ -11,11 +11,13 @@ import (
 	"net/http/cookiejar"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/AnandChowdhary/codex-usage/internal/auth"
+	"github.com/AnandChowdhary/codex-usage/internal/claude"
 	"github.com/AnandChowdhary/codex-usage/internal/codexauth"
 	"github.com/AnandChowdhary/codex-usage/internal/store"
 	"github.com/AnandChowdhary/codex-usage/internal/usage"
@@ -36,6 +38,7 @@ Usage:
   codex-usage redeem <label|email> [--yes]   Use a usage limit reset on an account
   codex-usage switch [<label|email>]         Make Codex use an account (or show which it uses)
   codex-usage rotate [--dry-run]             Switch Codex to the account with the most usage left
+  codex-usage claude <command>               Claude Code profiles: login, logout, switch, rotate, run
   codex-usage logout <label|email>           Sign out and forget an account
   codex-usage version                        Print the version
 
@@ -55,6 +58,10 @@ type App struct {
 	Location    *time.Location
 	OpenBrowser func(url string) error
 	Color       bool
+	// Environ is the environment passed on to Claude Code.
+	Environ func() []string
+	// StdoutTerminal is set when stdout is a terminal rather than a pipe.
+	StdoutTerminal bool
 }
 
 // ColorEnabled reports whether ANSI colors should be written to f.
@@ -62,6 +69,11 @@ func ColorEnabled(f *os.File) bool {
 	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		return false
 	}
+	return IsTerminal(f)
+}
+
+// IsTerminal reports whether f is a terminal.
+func IsTerminal(f *os.File) bool {
 	info, err := f.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
@@ -96,6 +108,9 @@ func (a *App) setDefaults() {
 	if a.OpenBrowser == nil {
 		a.OpenBrowser = openBrowser
 	}
+	if a.Environ == nil {
+		a.Environ = os.Environ
+	}
 }
 
 // Run executes the command line and returns the process exit code.
@@ -124,7 +139,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	case "login":
 		err = a.runLogin(ctx, args)
 	case "accounts":
-		err = a.runAccounts(args)
+		err = a.runAccounts(ctx, args)
 	case "logout":
 		err = a.runLogout(ctx, args)
 	case "redeem":
@@ -133,6 +148,8 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.runSwitch(ctx, args)
 	case "rotate":
 		err = a.runRotate(ctx, args)
+	case "claude":
+		err = a.runClaude(ctx, args)
 	default:
 		fmt.Fprintf(a.Stderr, "codex-usage: unknown command %q\n\n%s", cmd, helpText)
 		return 2
@@ -168,6 +185,9 @@ type env struct {
 	auth  *auth.Client
 	usage *usage.Client
 	codex codexauth.Home
+
+	claude     *claude.CLI
+	claudeRoot string // where Claude Code profiles live
 }
 
 func (a *App) newEnv(configPath string) (*env, error) {
@@ -177,17 +197,30 @@ func (a *App) newEnv(configPath string) (*env, error) {
 			return nil, err
 		}
 	}
+	if abs, err := filepath.Abs(configPath); err == nil {
+		// Claude Code keys its credentials on the profile path, so keep it stable.
+		configPath = abs
+	}
 	codex, err := codexauth.DefaultHome(a.Getenv)
 	if err != nil {
 		return nil, err
 	}
+	claudeBin := a.Getenv(ClaudeBinEnvVar)
+	switch claudeBin {
+	case "":
+		claudeBin, _ = exec.LookPath("claude")
+	case "off":
+		claudeBin = ""
+	}
 	userAgent := "codex-usage/" + a.Version
 	return &env{
-		codex: codex,
-		App:   a,
-		store: &store.Store{Path: configPath},
-		auth:  auth.NewClient(a.Getenv(AuthBaseURLEnvVar), a.HTTPClient, userAgent),
-		usage: usage.NewClient(a.Getenv(ChatGPTBaseURLEnvVar), a.HTTPClient, userAgent),
+		codex:      codex,
+		claude:     &claude.CLI{Bin: claudeBin, Environ: a.Environ()},
+		claudeRoot: filepath.Join(filepath.Dir(configPath), "claude"),
+		App:        a,
+		store:      &store.Store{Path: configPath},
+		auth:       auth.NewClient(a.Getenv(AuthBaseURLEnvVar), a.HTTPClient, userAgent),
+		usage:      usage.NewClient(a.Getenv(ChatGPTBaseURLEnvVar), a.HTTPClient, userAgent),
 	}, nil
 }
 

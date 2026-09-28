@@ -98,6 +98,14 @@ func subLimits(u *usage.Response) []subLimit {
 }
 
 func (e *env) renderUsage(results []result, all bool) {
+	inCodex := e.codexKey()
+	e.renderTable(results, all, func(r result) string {
+		return codexLabel(r.account.Label, r.account.Key() == inCodex)
+	})
+}
+
+// renderTable prints a usage table; label names each row's account.
+func (e *env) renderTable(results []result, all bool, label func(result) string) {
 	st := e.styles()
 	now := e.Now()
 
@@ -134,7 +142,6 @@ func (e *env) renderUsage(results []result, all bool) {
 	}
 	t := &table{header: append(header, "NOTES")}
 
-	inCodex := e.codexKey()
 	for _, r := range results {
 		plan := r.account.PlanType
 		var limit *usage.RateLimit
@@ -144,7 +151,7 @@ func (e *env) renderUsage(results []result, all bool) {
 				plan = r.usage.PlanType
 			}
 		}
-		row := []cell{{text: codexLabel(r.account.Label, r.account.Key() == inCodex)}, {text: orDash(plan)}}
+		row := []cell{{text: label(r)}, {text: orDash(plan)}}
 		row = append(row, e.windowCells(limit, lengths, now)...)
 		t.rows = append(t.rows, append(row, e.notes(r, st, now)))
 
@@ -188,9 +195,13 @@ func (e *env) windowCells(limit *usage.RateLimit, lengths []int64, now time.Time
 		case left < 50:
 			style = st.warn
 		}
+		reset := "-"
+		if w.ResetAt != 0 || w.ResetAfterSeconds != 0 {
+			reset = formatReset(now, w.ResetTime(now), e.Location)
+		}
 		cells = append(cells,
 			cell{text: fmt.Sprintf("%.0f%%", left), style: style},
-			cell{text: formatReset(now, w.ResetTime(now), e.Location)})
+			cell{text: reset})
 	}
 	return cells
 }
@@ -230,6 +241,7 @@ func (e *env) notes(r result, st styles, now time.Time) cell {
 			notes = append(notes, "no limits reported")
 		}
 	}
+	notes = append(notes, r.notes...)
 	if r.warning != nil {
 		notes = append(notes, r.warning.Error())
 	}

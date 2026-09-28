@@ -90,7 +90,7 @@ func describe(a store.Account) string {
 	return name
 }
 
-func (a *App) runAccounts(args []string) error {
+func (a *App) runAccounts(ctx context.Context, args []string) error {
 	fs, config := a.newFlags("accounts", "accounts [--json]")
 	asJSON := fs.Bool("json", false, "print JSON")
 	positional, err := parseFlags(fs, args)
@@ -109,8 +109,22 @@ func (a *App) runAccounts(args []string) error {
 	if err != nil {
 		return err
 	}
+	profiles, err := e.claudeProfiles(ctx, false)
+	if err != nil {
+		return err
+	}
+	current := e.currentClaude()
 
 	if *asJSON {
+		type profile struct {
+			Label     string `json:"label"`
+			Email     string `json:"email,omitempty"`
+			Plan      string `json:"plan,omitempty"`
+			ConfigDir string `json:"config_dir,omitempty"`
+			SignedIn  bool   `json:"signed_in"`
+			Current   bool   `json:"current,omitempty"`
+			Error     string `json:"error,omitempty"`
+		}
 		type account struct {
 			Label        string `json:"label"`
 			Email        string `json:"email,omitempty"`
@@ -123,7 +137,22 @@ func (a *App) runAccounts(args []string) error {
 		}
 		out := struct {
 			Accounts []account `json:"accounts"`
+			Claude   []profile `json:"claude,omitempty"`
 		}{Accounts: []account{}}
+		for _, r := range profiles {
+			p := profile{
+				Label:     r.profile.Label,
+				Email:     r.account.Email,
+				Plan:      r.account.PlanType,
+				ConfigDir: r.profile.Dir,
+				SignedIn:  r.status != nil && r.status.Subscription(),
+				Current:   r.profile.Label == current,
+			}
+			if r.err != nil {
+				p.Error = r.err.Error()
+			}
+			out.Claude = append(out.Claude, p)
+		}
 		inCodex := e.codexKey()
 		for _, acct := range f.Accounts {
 			out.Accounts = append(out.Accounts, account{
@@ -140,10 +169,26 @@ func (a *App) runAccounts(args []string) error {
 		return writeJSON(e.Stdout, out)
 	}
 
-	if len(f.Accounts) == 0 {
+	if len(f.Accounts) == 0 && len(profiles) == 0 {
 		fmt.Fprintln(e.Stderr, noAccountsMessage)
 		return nil
 	}
+	if len(f.Accounts) > 0 {
+		if len(profiles) > 0 {
+			fmt.Fprintln(e.Stdout, e.styles().bold("Codex"))
+		}
+		e.writeCodexAccounts(f)
+	}
+	if len(profiles) > 0 {
+		if len(f.Accounts) > 0 {
+			fmt.Fprintln(e.Stdout)
+		}
+		e.writeClaudeProfiles(profiles, current)
+	}
+	return nil
+}
+
+func (e *env) writeCodexAccounts(f *store.File) {
 	st := e.styles()
 	t := &table{header: []string{"LABEL", "EMAIL", "PLAN", "WORKSPACE", "LAST REFRESH", "STATUS"}}
 	now := e.Now()
@@ -163,7 +208,6 @@ func (a *App) runAccounts(args []string) error {
 		})
 	}
 	t.write(e.Stdout, st)
-	return nil
 }
 
 func (a *App) runLogout(ctx context.Context, args []string) error {
@@ -236,4 +280,22 @@ func resolveAccount(f *store.File, query string) (int, error) {
 		}
 		return 0, fmt.Errorf("%q matches several accounts (%s); pass a label instead", query, joinQuoted(labels))
 	}
+}
+
+func (e *env) writeClaudeProfiles(profiles []claudeResult, current string) {
+	st := e.styles()
+	fmt.Fprintln(e.Stdout, st.bold("Claude Code"))
+	t := &table{header: []string{"PROFILE", "EMAIL", "PLAN", "STATUS"}}
+	for _, r := range profiles {
+		status := cell{text: "ok", style: st.good}
+		if r.err != nil {
+			status = cell{text: r.err.Error(), style: st.bad}
+		}
+		label := r.profile.Label
+		if label == current {
+			label += " (current)"
+		}
+		t.rows = append(t.rows, []cell{{text: label}, {text: orDash(r.account.Email)}, {text: orDash(r.account.PlanType)}, status})
+	}
+	t.write(e.Stdout, st)
 }

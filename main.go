@@ -1,4 +1,5 @@
-// Command codex-usage reports usage across multiple Codex subscription accounts.
+// Command codex-usage reports usage across multiple Codex and Claude Code
+// subscription accounts, and switches between them.
 package main
 
 import (
@@ -23,6 +24,8 @@ func main() {
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
 		Color:   cli.ColorEnabled(os.Stdout),
+
+		StdoutTerminal: cli.IsTerminal(os.Stdout),
 	}
 	code := app.Run(ctx, os.Args[1:])
 	stop()

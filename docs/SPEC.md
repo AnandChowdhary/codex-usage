@@ -32,6 +32,7 @@ side@proton.me       plus   -        -          -            -             re-lo
 | `codex-usage accounts` | List stored accounts (label, email, plan, workspace, last refresh). No network calls. |
 | `codex-usage switch [<label\|email>] [--force]` | Sign the Codex CLI in to the account, or show which one it uses (see §5). |
 | `codex-usage rotate [--dry-run] [--force]` | Switch Codex to the account with the most usage left (see §5). |
+| `codex-usage claude login\|logout\|switch\|rotate\|run …` | Claude Code profiles (see §6). |
 | `codex-usage redeem <label\|email> [--credit ID] [--yes]` | Use a usage limit reset after confirming (see §4). |
 | `codex-usage logout <label\|email>` | Revoke the refresh token (best effort) and remove the account. |
 | `codex-usage --version` | Print the version. |
@@ -248,6 +249,74 @@ that would sign Codex out too.
 - If none qualify, fail and name the accounts that have usage limit resets.
 - The score is a percentage, so a Pro and a Plus plan with the same
   percentage left rank equally, even though Pro's limits are larger.
+
+### 6. Claude Code profiles
+
+Researched in Claude Code 2.1.282 and tested live with two Max accounts on
+2026-09-28.
+
+**Why this is different from Codex.** Claude Code's OAuth works much like
+Codex's: PKCE with a pasted code, rotating refresh tokens, and a private usage
+endpoint. But
+[Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)
+say third-party developers may not "offer Claude.ai login into their own
+applications" or "collect, store, or intermediate Claude.ai credentials or
+session tokens". So codex-usage never handles Claude tokens: every operation
+runs the unmodified `claude` binary.
+
+- **Profiles.** A profile is a directory used as `CLAUDE_CONFIG_DIR`,
+  `$CODEX_USAGE_HOME/claude/<profile>`. Names match
+  `[A-Za-z0-9][A-Za-z0-9._@+-]{0,63}`, and `default` means Claude Code's own
+  sign-in (no `CLAUDE_CONFIG_DIR`).
+  - Claude Code keys its macOS Keychain entry on the directory path, so paths
+    are made absolute and profiles are never renamed.
+- **Sign-in** is `claude auth login --claudeai`, run interactively with the
+  profile's environment. It prints a claude.com link, and on a machine
+  without a browser it asks for the code.
+- **Status** is `claude auth status`, which prints JSON with `loggedIn`,
+  `authMethod` (`claude.ai` for plans), `email`, `orgName` and
+  `subscriptionType`. It exits 1 when signed out, but still prints JSON.
+- **Usage** comes from
+  `claude -p /usage --model haiku --tools "" --strict-mcp-config --no-session-persistence --output-format json`,
+  run from an empty temp dir with `TZ=UTC`.
+  - Claude Code answers `/usage` locally: `local_command: "usage"`,
+    `num_turns: 0`, `total_cost_usd: 0`. If that ever changes, the table gets
+    a note.
+  - `result` holds text like:
+
+    ```
+    Current session: 4% used · resets Sep 28, 5:59pm (UTC)
+    Current week (all models): 27% used · resets Sep 29, 9:59pm (UTC)
+    Current week (Fable): 0% used · resets Sep 29, 10pm (UTC)
+    ```
+
+  - "session" is the 5-hour window and "all models" is the weekly window.
+    Other named weeks are per-model limits.
+  - Reset times have no year, so the next matching date is used. With no
+    session in progress there's no reset time at all.
+  - Lines we don't recognise are shown as notes.
+  - A headless "hi" also returns these windows, in `rate_limit_event.unifiedWindows`.
+    But those fields are undocumented, and the request costs about 6.7k
+    tokens and starts a 5-hour window, so `/usage` is used instead.
+- **Environment.** For login, status, usage and logout, `CLAUDE_CONFIG_DIR`,
+  `CLAUDECODE`, `ANTHROPIC_*` and `CLAUDE_CODE_*` are removed. Otherwise an
+  API key, gateway or the parent Claude session could take over. `claude run`
+  keeps the caller's environment apart from `CLAUDE_CONFIG_DIR`.
+- **Switching** can't change another process's environment. `claude switch`
+  therefore:
+  - writes `claude/current` (the profile name), plus `current.sh` and
+    `current.fish` for shells to source at startup;
+  - prints `export CLAUDE_CONFIG_DIR=…` (or `unset`) for `eval`;
+  - prints its messages to stderr.
+
+  If `CODEX_USAGE_CLAUDE_PROFILE` (set by `current.sh`) is missing, it also
+  suggests the startup line to add.
+- **rotate** uses the same score as Codex: the lowest share left across the
+  5-hour and weekly windows. Per-model windows are ignored, and profiles at a
+  limit are skipped.
+- **Logout** runs `claude auth logout`, then deletes the directory after a
+  confirmation. If it was the current profile, new shells go back to
+  `default`.
 
 ## Storage
 

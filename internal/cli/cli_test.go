@@ -161,14 +161,25 @@ type harness struct {
 	codexHome string
 	opened    []string
 	stdin     string
+
+	// Claude Code is faked by this test binary (see fakeClaude).
+	claudeDefault string            // the fake's default config dir
+	claudeLog     string            // one JSON line per fake claude call
+	claudeOn      bool              // run the fake claude; otherwise Claude Code is off
+	getenv        map[string]string // extra Getenv values
+	environ       []string          // extra environment for Claude Code
 }
 
 func newHarness(t *testing.T) *harness {
+	dir := t.TempDir()
 	return &harness{
-		t:         t,
-		backend:   newBackend(t),
-		path:      filepath.Join(t.TempDir(), "accounts.json"),
-		codexHome: filepath.Join(t.TempDir(), "codex"),
+		t:             t,
+		backend:       newBackend(t),
+		path:          filepath.Join(t.TempDir(), "accounts.json"),
+		codexHome:     filepath.Join(t.TempDir(), "codex"),
+		claudeDefault: filepath.Join(dir, "claude-default"),
+		claudeLog:     filepath.Join(dir, "claude.log"),
+		getenv:        map[string]string{},
 	}
 }
 
@@ -189,8 +200,24 @@ func (h *harness) run(args ...string) (stdout, stderr string, code int) {
 				return filepath.Dir(h.path)
 			case codexauth.HomeEnvVar:
 				return h.codexHome
+			case ClaudeBinEnvVar:
+				if !h.claudeOn {
+					return "off"
+				}
+				return os.Args[0]
 			}
-			return ""
+			return h.getenv[k]
+		},
+		Environ: func() []string {
+			return append([]string{
+				"CODEX_USAGE_FAKE_CLAUDE=1",
+				"GORACE=atexit_sleep_ms=0", // the race detector otherwise waits 1s at exit
+				"FAKE_CLAUDE_DEFAULT=" + h.claudeDefault,
+				"FAKE_CLAUDE_LOG=" + h.claudeLog,
+				"ANTHROPIC_API_KEY=sk-must-not-reach-claude",
+				"CLAUDE_CODE_OAUTH_TOKEN=must-not-reach-claude",
+				"CLAUDE_CONFIG_DIR=/wrong/profile",
+			}, h.environ...)
 		},
 		HTTPClient:  h.backend.srv.Client(),
 		Now:         func() time.Time { return testNow },

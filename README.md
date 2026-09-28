@@ -4,12 +4,13 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/AnandChowdhary/codex-usage.svg)](https://pkg.go.dev/github.com/AnandChowdhary/codex-usage)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**See how much Codex usage is left across all your ChatGPT accounts, in one command.**
+**See how much Codex and Claude Code usage is left across all your accounts, in one command.**
 
 If you use Codex with more than one ChatGPT account (a personal Plus plan, a
-Pro plan, a Team workspace), you can't see which one still has room without
-signing in to each. `codex-usage` signs in to all of them once and shows their
-limits side by side.
+Pro plan, a Team workspace), or Claude Code with more than one Claude plan,
+you can't see which one still has room without signing in to each.
+`codex-usage` signs in to all of them once, shows their limits side by side,
+and switches Codex or Claude Code to whichever has the most left.
 
 ```
 $ codex-usage
@@ -25,6 +26,10 @@ side@proton.me  plus  64%      4h02m   90%          Thu 18:10
 - **Switch Codex between accounts.** `switch` signs the Codex CLI in to any of
   your accounts, and `rotate` picks the one with the most usage left. Codex's
   login is only changed when you run one of these commands.
+- **Claude Code too.** Add Claude Pro and Max accounts as
+  [Claude Code profiles](#claude-code). Their usage appears next to your Codex
+  accounts, and `claude switch`/`claude rotate` pick the profile new terminals
+  use.
 - **Usage limit resets.** It shows which accounts have earned resets and when
   they expire. `codex-usage redeem` uses one without opening Codex.
 - **Fast.** All accounts are checked in parallel, and expiring sign-ins are
@@ -113,6 +118,11 @@ codex-usage
 | `codex-usage switch <label\|email>` | Sign the Codex CLI in to this account. Without an account, it shows which one Codex uses. See [Switching Codex between accounts](#switching-codex-between-accounts). |
 | `codex-usage rotate` | Switch Codex to the account with the most usage left. `--dry-run` only shows the choice. |
 | `codex-usage logout <label\|email>` | End an account's session and remove it. |
+| `codex-usage claude login <profile>` | Sign in a [Claude Code profile](#claude-code) with Claude Code's own sign-in. |
+| `codex-usage claude switch <profile>` | Use that profile in new terminals (and this one, with `eval`). |
+| `codex-usage claude rotate` | Switch to the Claude Code profile with the most usage left. |
+| `codex-usage claude run <profile> [args]` | Start Claude Code in a profile. |
+| `codex-usage claude logout <profile>` | Sign a profile out and delete it. |
 | `codex-usage version` | Print the version. |
 
 Every command accepts `--config PATH` to use a different accounts file.
@@ -196,11 +206,65 @@ $ codex-usage switch work
   `switch` refuses to replace it. With `--force` it replaces it and keeps a
   backup at `~/.codex-usage/codex-auth.backup.json`.
 
+### Claude Code
+
+Each Claude account is a **profile**: its own Claude Code configuration folder
+(`CLAUDE_CONFIG_DIR`) under `~/.codex-usage/claude/`. Your normal Claude Code
+sign-in shows up as the `default` profile.
+
+```
+$ codex-usage claude login work
+Opening browser to sign in…
+Paste code here if prompted > …
+✓ Signed in Claude Code profile work (you@acme.com, max).
+
+$ codex-usage
+Claude Code
+ACCOUNT          PLAN  5H LEFT  RESETS  WEEKLY LEFT  RESETS     NOTES
+default          max   100%     -       0%           Wed 09:00  limit reached
+work (current)   max   94%      2h33m   72%          Tue 21:59
+
+$ eval "$(codex-usage claude rotate)"
+✓ Switched Claude Code from default to work (you@acme.com, max): 72% left in the weekly window.
+```
+
+- **codex-usage never touches Claude credentials.**
+  [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)
+  don't allow other apps to handle Claude sign-in or store Claude tokens, so
+  everything goes through the unmodified `claude` binary:
+  - `claude login` runs `claude auth login` with the profile's
+    `CLAUDE_CONFIG_DIR`, and Claude Code keeps its own credentials.
+  - Usage comes from running Claude Code's `/usage` command headlessly. It's
+    answered locally, so **checking usage costs no tokens** and doesn't start
+    a 5-hour window.
+- **Switching works per terminal.** `claude switch <profile>` and
+  `claude rotate` record the profile for new terminals, and print the command
+  that switches the current one. To use them:
+  - Run them with `eval "$(…)"` to switch the terminal you're in too.
+  - Add the line they suggest to your shell's startup file (e.g. `~/.zshrc`)
+    once, so every new terminal follows along.
+  - `claude run <profile>` starts Claude Code in a profile directly.
+- **It doesn't affect other apps.** The switch applies to Claude Code started
+  from a terminal. The IDE extensions and the desktop app keep their own
+  sign-in.
+- **Windows:** `switch` prints POSIX shell or fish commands, so on Windows use
+  `codex-usage claude run <profile>`.
+- **Per-model limits** (e.g. a weekly Fable limit) appear with `--all`.
+  `rotate` ignores them: it picks the profile with the most left in its
+  tightest 5-hour or weekly window.
+- **Some Codex features aren't available.** Usage limit resets and credits
+  aren't reported, because `/usage` doesn't show them.
+- **Turning it off:** `CODEX_USAGE_CLAUDE_BIN=off` disables Claude Code
+  support. You can also set it to a path to use a different `claude` binary.
+
 ### JSON
 
 ```sh
 codex-usage --json | jq -r '.accounts[] | "\(.label): \([.rate_limit.windows[]? | "\(.name) \(.left_percent)%"] | join(", "))"'
 ```
+
+Claude Code profiles appear in a separate `claude` array, with the same
+fields plus `config_dir` and `current`.
 
 ```jsonc
 {
@@ -349,6 +413,7 @@ internal/cli/        commands, table and JSON output
 internal/auth/       device-code login, token refresh and revocation, JWT claims
 internal/store/      accounts.json with atomic writes and cross-process locking
 internal/codexauth/  the Codex CLI's auth.json, for switch and rotate
+internal/claude/     Claude Code profiles, run through the claude binary
 internal/usage/      /wham/usage and usage limit reset client, response types
 ```
 

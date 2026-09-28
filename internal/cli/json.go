@@ -11,6 +11,7 @@ import (
 type jsonUsage struct {
 	FetchedAt string        `json:"fetched_at"`
 	Accounts  []jsonAccount `json:"accounts"`
+	Claude    []jsonAccount `json:"claude,omitempty"`
 }
 
 type jsonAccount struct {
@@ -27,6 +28,9 @@ type jsonAccount struct {
 	ResetCredits         *jsonResetCredits `json:"rate_limit_reset_credits,omitempty"`
 	NeedsRelogin         bool              `json:"needs_relogin,omitempty"`
 	InCodex              bool              `json:"in_codex,omitempty"`
+	ConfigDir            string            `json:"config_dir,omitempty"`
+	Current              bool              `json:"current,omitempty"`
+	Notes                []string          `json:"notes,omitempty"`
 	Warning              string            `json:"warning,omitempty"`
 	Error                string            `json:"error,omitempty"`
 }
@@ -73,65 +77,78 @@ type jsonCredits struct {
 	Balance    string `json:"balance,omitempty"`
 }
 
-func (e *env) usageJSON(results []result) jsonUsage {
+func (e *env) usageJSON(results []result, claudeResults []claudeResult) jsonUsage {
 	now := e.Now()
 	out := jsonUsage{FetchedAt: formatRFC3339(now), Accounts: []jsonAccount{}}
 	inCodex := e.codexKey()
 	for _, r := range results {
-		acct := jsonAccount{
-			Label:     r.account.Label,
-			Email:     r.account.Email,
-			Plan:      r.account.PlanType,
-			AccountID: r.account.AccountID,
-			InCodex:   r.account.Key() == inCodex,
-		}
-		if _, ok := r.err.(*reloginError); ok {
-			acct.NeedsRelogin = true
-		}
-		if r.err != nil {
-			acct.Error = r.err.Error()
-		}
-		if r.warning != nil {
-			acct.Warning = r.warning.Error()
-		}
-		if u := r.usage; u != nil {
-			if u.PlanType != "" {
-				acct.Plan = u.PlanType
-			}
-			acct.RateLimit = rateLimitJSON(u.RateLimit, now)
-			acct.CodeReviewRateLimit = rateLimitJSON(u.CodeReviewRateLimit, now)
-			acct.SpendLimitReached = u.SpendControl != nil && u.SpendControl.Reached
-			for _, extra := range u.AdditionalRateLimits {
-				acct.AdditionalRateLimits = append(acct.AdditionalRateLimits, jsonAdditional{
-					Name:           extra.LimitName,
-					MeteredFeature: extra.MeteredFeature,
-					RateLimit:      rateLimitJSON(extra.RateLimit, now),
-				})
-			}
-			if c := u.Credits; c != nil {
-				acct.Credits = &jsonCredits{HasCredits: c.HasCredits, Unlimited: c.Unlimited, Balance: string(c.Balance)}
-			}
-			if u.RateLimitReachedType != nil {
-				acct.LimitReachedType = u.RateLimitReachedType.Type
-			}
-			if u.RateLimitResetCredits != nil || r.resets != nil {
-				resets := &jsonResetCredits{AvailableCount: resetCount(r)}
-				for _, c := range r.resets.Available() {
-					resets.Credits = append(resets.Credits, jsonResetCredit{
-						ID:          c.ID,
-						Title:       c.Title,
-						Description: c.Description,
-						ResetType:   c.ResetType,
-						GrantedAt:   c.GrantedAt,
-						ExpiresAt:   c.ExpiresAt,
-					})
-				}
-				acct.ResetCredits = resets
-			}
-		}
+		acct := accountJSON(r, now)
+		acct.InCodex = r.account.Key() == inCodex
 		out.Accounts = append(out.Accounts, acct)
 	}
+	current := e.currentClaude()
+	for _, r := range claudeResults {
+		acct := accountJSON(r.result, now)
+		acct.ConfigDir = r.profile.Dir
+		acct.Current = r.profile.Label == current
+		out.Claude = append(out.Claude, acct)
+	}
 	return out
+}
+
+func accountJSON(r result, now time.Time) jsonAccount {
+	acct := jsonAccount{
+		Label:     r.account.Label,
+		Email:     r.account.Email,
+		Plan:      r.account.PlanType,
+		AccountID: r.account.AccountID,
+		Notes:     r.notes,
+	}
+	if _, ok := r.err.(*reloginError); ok {
+		acct.NeedsRelogin = true
+	}
+	if r.err != nil {
+		acct.Error = r.err.Error()
+	}
+	if r.warning != nil {
+		acct.Warning = r.warning.Error()
+	}
+	if u := r.usage; u != nil {
+		if u.PlanType != "" {
+			acct.Plan = u.PlanType
+		}
+		acct.RateLimit = rateLimitJSON(u.RateLimit, now)
+		acct.CodeReviewRateLimit = rateLimitJSON(u.CodeReviewRateLimit, now)
+		acct.SpendLimitReached = u.SpendControl != nil && u.SpendControl.Reached
+		for _, extra := range u.AdditionalRateLimits {
+			acct.AdditionalRateLimits = append(acct.AdditionalRateLimits, jsonAdditional{
+				Name:           extra.LimitName,
+				MeteredFeature: extra.MeteredFeature,
+				RateLimit:      rateLimitJSON(extra.RateLimit, now),
+			})
+		}
+		if c := u.Credits; c != nil {
+			acct.Credits = &jsonCredits{HasCredits: c.HasCredits, Unlimited: c.Unlimited, Balance: string(c.Balance)}
+		}
+		if u.RateLimitReachedType != nil {
+			acct.LimitReachedType = u.RateLimitReachedType.Type
+		}
+		if u.RateLimitResetCredits != nil || r.resets != nil {
+			resets := &jsonResetCredits{AvailableCount: resetCount(r)}
+			for _, c := range r.resets.Available() {
+				resets.Credits = append(resets.Credits, jsonResetCredit{
+					ID:          c.ID,
+					Title:       c.Title,
+					Description: c.Description,
+					ResetType:   c.ResetType,
+					GrantedAt:   c.GrantedAt,
+					ExpiresAt:   c.ExpiresAt,
+				})
+			}
+			acct.ResetCredits = resets
+		}
+	}
+	return acct
 }
 
 func rateLimitJSON(r *usage.RateLimit, now time.Time) *jsonRateLimit {
