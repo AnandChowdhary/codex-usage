@@ -19,9 +19,11 @@ type jsonAccount struct {
 	Plan                 string           `json:"plan,omitempty"`
 	AccountID            string           `json:"chatgpt_account_id,omitempty"`
 	RateLimit            *jsonRateLimit   `json:"rate_limit,omitempty"`
+	CodeReviewRateLimit  *jsonRateLimit   `json:"code_review_rate_limit,omitempty"`
 	AdditionalRateLimits []jsonAdditional `json:"additional_rate_limits,omitempty"`
 	Credits              *jsonCredits     `json:"credits,omitempty"`
 	LimitReachedType     string           `json:"limit_reached_type,omitempty"`
+	SpendLimitReached    bool             `json:"spend_limit_reached,omitempty"`
 	NeedsRelogin         bool             `json:"needs_relogin,omitempty"`
 	Warning              string           `json:"warning,omitempty"`
 	Error                string           `json:"error,omitempty"`
@@ -77,6 +79,8 @@ func (e *env) usageJSON(results []result) jsonUsage {
 				acct.Plan = u.PlanType
 			}
 			acct.RateLimit = rateLimitJSON(u.RateLimit, now)
+			acct.CodeReviewRateLimit = rateLimitJSON(u.CodeReviewRateLimit, now)
+			acct.SpendLimitReached = u.SpendControl != nil && u.SpendControl.Reached
 			for _, extra := range u.AdditionalRateLimits {
 				acct.AdditionalRateLimits = append(acct.AdditionalRateLimits, jsonAdditional{
 					Name:           extra.LimitName,

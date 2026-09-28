@@ -81,8 +81,12 @@ type AdditionalRateLimit struct {
 type Response struct {
 	PlanType             string                `json:"plan_type"`
 	RateLimit            *RateLimit            `json:"rate_limit"`
-	Credits              *Credits              `json:"credits"`
+	CodeReviewRateLimit  *RateLimit            `json:"code_review_rate_limit"`
 	AdditionalRateLimits []AdditionalRateLimit `json:"additional_rate_limits"`
+	Credits              *Credits              `json:"credits"`
+	SpendControl         *struct {
+		Reached bool `json:"reached"`
+	} `json:"spend_control"`
 	RateLimitReachedType *struct {
 		Type string `json:"type"`
 	} `json:"rate_limit_reached_type"`

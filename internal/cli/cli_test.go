@@ -242,7 +242,20 @@ func TestUsageTable(t *testing.T) {
 		h.account("work", "work@acme.com", "pro", "ws-work", workAccess, "rt-work"),
 		h.account("home", "me@example.com", "plus", "ws-home", homeAccess, "rt-home"),
 	)
-	h.backend.usage[workAccess] = usageBody("pro", 28, 59, "")
+	// Shaped like a real Pro response: a weekly primary window and nothing else.
+	weekly := fmt.Sprint(testNow.Add(3*24*time.Hour - 3*time.Hour).Unix())
+	h.backend.usage[workAccess] = `{
+	  "plan_type": "pro",
+	  "rate_limit": {"allowed": true, "limit_reached": false,
+	    "primary_window": {"used_percent": 19, "limit_window_seconds": 604800, "reset_after_seconds": 0, "reset_at": ` + weekly + `},
+	    "secondary_window": null},
+	  "code_review_rate_limit": {"allowed": true, "limit_reached": false,
+	    "primary_window": {"used_percent": 50, "limit_window_seconds": 604800, "reset_at": ` + weekly + `}},
+	  "additional_rate_limits": null,
+	  "credits": {"has_credits": false, "unlimited": false, "balance": "0"},
+	  "spend_control": {"reached": false, "individual_limit": null},
+	  "rate_limit_reached_type": null
+	}`
 	h.backend.usage[homeAccess] = `{
 	  "plan_type": "plus",
 	  "rate_limit": {"allowed": false, "limit_reached": true,
@@ -254,23 +267,35 @@ func TestUsageTable(t *testing.T) {
 	      "primary_window": {"used_percent": 10, "limit_window_seconds": 3600, "reset_at": ` + fmt.Sprint(testNow.Add(30*time.Minute).Unix()) + `}}}]
 	}`
 
-	out, errOut, code := h.run("--all")
+	out, errOut, code := h.run()
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
 	want := strings.Join([]string{
-		"ACCOUNT    PLAN  5H LEFT   RESETS  WEEKLY LEFT  RESETS       NOTES",
-		"work       pro   72%       2h13m   41%          Thu 09:00",
-		"home       plus  0%        38m     12%          Oct 8 12:00  limit reached; credits: 4.20",
-		"  ↳ Spark        90% (1h)  30m     -            -",
+		"ACCOUNT  PLAN  5H LEFT  RESETS  WEEKLY LEFT  RESETS       NOTES",
+		"work     pro   -        -       81%          Thu 09:00",
+		"home     plus  0%       38m     12%          Oct 8 12:00  limit reached; credits: 4.20",
 		"",
 	}, "\n")
 	if out != want {
 		t.Fatalf("output:\n%s\nwant:\n%s", out, want)
 	}
 
+	out, _, _ = h.run("--all")
+	want = strings.Join([]string{
+		"ACCOUNT          PLAN  1H LEFT  RESETS  5H LEFT  RESETS  WEEKLY LEFT  RESETS       NOTES",
+		"work             pro   -        -       -        -       81%          Thu 09:00",
+		"  ↳ code review        -        -       -        -       50%          Thu 09:00",
+		"home             plus  -        -       0%       38m     12%          Oct 8 12:00  limit reached; credits: 4.20",
+		"  ↳ Spark              90%      30m     -        -       -            -",
+		"",
+	}, "\n")
+	if out != want {
+		t.Fatalf("--all output:\n%s\nwant:\n%s", out, want)
+	}
+
 	calls := h.backend.usageCalls
-	if len(calls) != 2 {
+	if len(calls) != 4 {
 		t.Fatalf("%d usage calls", len(calls))
 	}
 	for _, hdr := range calls {

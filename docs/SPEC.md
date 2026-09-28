@@ -140,14 +140,22 @@ Response (fields we use):
 ```
 
 - Every nested object may be `null` or missing, so decode defensively.
-- Label windows by `limit_window_seconds`: 18000 → "5h", 604800 →
-  "weekly", and anything else is formatted as a duration. Don't assume
-  that primary always means 5h.
+- **Observed live (Pro account, 2026-09-28):** `primary_window` was the
+  *weekly* window (`limit_window_seconds: 604800`) and `secondary_window`
+  was `null`. The response also carried `code_review_rate_limit` (same shape as
+  `rate_limit`), `spend_control: {"reached": bool}`, `model_usage`, and
+  `rate_limit_reset_credits`. So never assume primary means 5h.
+- The table has one "LEFT / RESETS" column pair per distinct window length
+  across all accounts, shortest first (e.g. `5H`, `WEEKLY`). Accounts without
+  that window show `-`. Windows are labelled by `limit_window_seconds`:
+  18000 → "5h", 86400 → "daily", 604800 → "weekly", and anything else is
+  formatted as a duration.
 - Show "left" as `100 - used_percent`.
 - Show resets as relative time when under 24h, otherwise as a local weekday
   and time.
-- `additional_rate_limits` (e.g. per-model limits) appear as extra rows with
-  `--all`.
+- `--all` adds rows for `code_review_rate_limit` and `additional_rate_limits`
+  (e.g. per-model limits).
+- Notes show when a limit or spend control is reached, and any credit balance.
 
 ## Storage
 

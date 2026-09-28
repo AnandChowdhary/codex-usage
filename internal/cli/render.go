@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -75,19 +76,63 @@ func (t *table) write(w io.Writer, st styles) {
 	}
 }
 
+// subLimit is an extra limit listed under its account with --all.
+type subLimit struct {
+	name  string
+	limit *usage.RateLimit
+}
+
+func subLimits(u *usage.Response) []subLimit {
+	var out []subLimit
+	if u.CodeReviewRateLimit != nil {
+		out = append(out, subLimit{name: "code review", limit: u.CodeReviewRateLimit})
+	}
+	for _, extra := range u.AdditionalRateLimits {
+		name := extra.LimitName
+		if name == "" {
+			name = extra.MeteredFeature
+		}
+		out = append(out, subLimit{name: name, limit: extra.RateLimit})
+	}
+	return out
+}
+
 func (e *env) renderUsage(results []result, all bool) {
 	st := e.styles()
 	now := e.Now()
-	labels := [2]string{
-		commonLabel(results, func(r *usage.RateLimit) *usage.Window { return r.PrimaryWindow }, "5h"),
-		commonLabel(results, func(r *usage.RateLimit) *usage.Window { return r.SecondaryWindow }, "weekly"),
+
+	// One column pair per window length, shortest first. Plans differ (Plus
+	// has 5h and weekly windows, Pro may only have weekly), so columns follow
+	// the windows actually reported rather than primary/secondary.
+	seen := map[int64]bool{}
+	var lengths []int64
+	addWindows := func(limit *usage.RateLimit) {
+		for _, w := range limit.Windows() {
+			if !seen[w.LimitWindowSeconds] {
+				seen[w.LimitWindowSeconds] = true
+				lengths = append(lengths, w.LimitWindowSeconds)
+			}
+		}
 	}
-	t := &table{header: []string{
-		"ACCOUNT", "PLAN",
-		strings.ToUpper(labels[0]) + " LEFT", "RESETS",
-		strings.ToUpper(labels[1]) + " LEFT", "RESETS",
-		"NOTES",
-	}}
+	for _, r := range results {
+		if r.usage == nil {
+			continue
+		}
+		addWindows(r.usage.RateLimit)
+		if all {
+			for _, s := range subLimits(r.usage) {
+				addWindows(s.limit)
+			}
+		}
+	}
+	slices.Sort(lengths)
+
+	header := []string{"ACCOUNT", "PLAN"}
+	for _, l := range lengths {
+		label := (&usage.Window{LimitWindowSeconds: l}).Label()
+		header = append(header, strings.ToUpper(label)+" LEFT", "RESETS")
+	}
+	t := &table{header: append(header, "NOTES")}
 
 	for _, r := range results {
 		plan := r.account.PlanType
@@ -99,22 +144,17 @@ func (e *env) renderUsage(results []result, all bool) {
 			}
 		}
 		row := []cell{{text: r.account.Label}, {text: orDash(plan)}}
-		row = append(row, e.windowCells(limit, labels, now)...)
-		row = append(row, e.notes(r, st))
-		t.rows = append(t.rows, row)
+		row = append(row, e.windowCells(limit, lengths, now)...)
+		t.rows = append(t.rows, append(row, e.notes(r, st)))
 
 		if !all || r.usage == nil {
 			continue
 		}
-		for _, extra := range r.usage.AdditionalRateLimits {
-			name := extra.LimitName
-			if name == "" {
-				name = extra.MeteredFeature
-			}
-			row := []cell{{text: "  ↳ " + name, style: st.dim}, {text: ""}}
-			row = append(row, e.windowCells(extra.RateLimit, labels, now)...)
+		for _, s := range subLimits(r.usage) {
+			row := []cell{{text: "  ↳ " + s.name, style: st.dim}, {}}
+			row = append(row, e.windowCells(s.limit, lengths, now)...)
 			note := cell{}
-			if extra.RateLimit.Blocked() {
+			if s.limit.Blocked() {
 				note = cell{text: "limit reached", style: st.bad}
 			}
 			t.rows = append(t.rows, append(row, note))
@@ -123,21 +163,23 @@ func (e *env) renderUsage(results []result, all bool) {
 	t.write(e.Stdout, st)
 }
 
-// windowCells renders the primary and secondary window as "left" and
-// "resets" cells, naming the window when it differs from the column header.
-func (e *env) windowCells(limit *usage.RateLimit, labels [2]string, now time.Time) []cell {
+// windowCells renders "left" and "resets" cells for each column's window length.
+func (e *env) windowCells(limit *usage.RateLimit, lengths []int64, now time.Time) []cell {
 	st := e.styles()
 	var cells []cell
-	for i, w := range []*usage.Window{primary(limit), secondary(limit)} {
+	for _, length := range lengths {
+		var w *usage.Window
+		for _, candidate := range limit.Windows() {
+			if candidate.LimitWindowSeconds == length {
+				w = candidate
+				break
+			}
+		}
 		if w == nil {
 			cells = append(cells, cell{text: "-", style: st.dim}, cell{text: "-", style: st.dim})
 			continue
 		}
 		left := w.LeftPercent()
-		text := fmt.Sprintf("%.0f%%", left)
-		if l := w.Label(); l != labels[i] {
-			text += " (" + l + ")"
-		}
 		style := st.good
 		switch {
 		case left < 20:
@@ -145,7 +187,9 @@ func (e *env) windowCells(limit *usage.RateLimit, labels [2]string, now time.Tim
 		case left < 50:
 			style = st.warn
 		}
-		cells = append(cells, cell{text: text, style: style}, cell{text: formatReset(now, w.ResetTime(now), e.Location)})
+		cells = append(cells,
+			cell{text: fmt.Sprintf("%.0f%%", left), style: style},
+			cell{text: formatReset(now, w.ResetTime(now), e.Location)})
 	}
 	return cells
 }
@@ -156,15 +200,19 @@ func (e *env) notes(r result, st styles) cell {
 	}
 	var notes []string
 	style := st.dim
-	blocked := r.usage != nil && r.usage.RateLimit.Blocked()
+	blocked := false
 	if u := r.usage; u != nil {
-		if blocked {
+		if u.RateLimit.Blocked() {
 			reason := "limit reached"
 			if u.RateLimitReachedType != nil && u.RateLimitReachedType.Type != "" && u.RateLimitReachedType.Type != "rate_limit_reached" {
 				reason = strings.ReplaceAll(u.RateLimitReachedType.Type, "_", " ")
 			}
 			notes = append(notes, reason)
-			style = st.bad
+			blocked = true
+		}
+		if u.SpendControl != nil && u.SpendControl.Reached {
+			notes = append(notes, "spend limit reached")
+			blocked = true
 		}
 		if c := u.Credits; c != nil {
 			switch {
@@ -178,48 +226,16 @@ func (e *env) notes(r result, st styles) cell {
 			notes = append(notes, "no limits reported")
 		}
 	}
+	switch {
+	case blocked:
+		style = st.bad
+	case r.warning != nil:
+		style = st.warn
+	}
 	if r.warning != nil {
 		notes = append(notes, r.warning.Error())
-		if !blocked {
-			style = st.warn
-		}
 	}
 	return cell{text: strings.Join(notes, "; "), style: style}
-}
-
-// commonLabel is the most frequent label of the chosen window, or fallback.
-func commonLabel(results []result, pick func(*usage.RateLimit) *usage.Window, fallback string) string {
-	counts := map[string]int{}
-	best, bestCount := fallback, 0
-	for _, r := range results {
-		if r.usage == nil || r.usage.RateLimit == nil {
-			continue
-		}
-		w := pick(r.usage.RateLimit)
-		if w == nil {
-			continue
-		}
-		l := w.Label()
-		counts[l]++
-		if counts[l] > bestCount {
-			best, bestCount = l, counts[l]
-		}
-	}
-	return best
-}
-
-func primary(r *usage.RateLimit) *usage.Window {
-	if r == nil {
-		return nil
-	}
-	return r.PrimaryWindow
-}
-
-func secondary(r *usage.RateLimit) *usage.Window {
-	if r == nil {
-		return nil
-	}
-	return r.SecondaryWindow
 }
 
 // formatReset shows a reset as a countdown within a day, else as a local time.

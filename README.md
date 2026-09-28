@@ -5,9 +5,13 @@ Shows how much Codex usage is left across all your ChatGPT accounts.
 ```
 $ codex-usage
 ACCOUNT         PLAN  5H LEFT  RESETS  WEEKLY LEFT  RESETS       NOTES
-work            pro   72%      2h13m   41%          Thu 09:00
+work@acme.com   pro   -        -       81%          Mon 07:33
 me@example.com  plus  0%       38m     12%          Oct 8 12:00  limit reached; credits: 4.20
 ```
+
+There's one column pair for each limit window that your accounts report.
+Plans differ: a Pro account may only have a weekly window, while Plus has both
+5-hour and weekly windows.
 
 ## Install
 
