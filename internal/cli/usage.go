@@ -36,6 +36,7 @@ func (e *reloginError) Error() string {
 type result struct {
 	account store.Account
 	usage   *usage.Response
+	resets  *usage.ResetCredits
 	err     error
 	warning error
 }
@@ -170,11 +171,18 @@ func (e *env) fetch(ctx context.Context, results []result, idx []int) {
 		wg.Add(1)
 		go func(r *result) {
 			defer wg.Done()
-			r.usage, r.err = e.usage.Fetch(ctx, usage.Credentials{
+			creds := usage.Credentials{
 				AccessToken: r.account.Tokens.AccessToken,
 				AccountID:   r.account.AccountID,
 				FedRAMP:     r.account.FedRAMP,
-			})
+			}
+			r.usage, r.err = e.usage.Fetch(ctx, creds)
+			if r.err != nil || r.usage.AvailableResets() == 0 {
+				return
+			}
+			// Usage only carries the count; the list adds expiry dates. It's
+			// extra detail, so if it fails the count alone is shown.
+			r.resets, _ = e.usage.FetchResetCredits(ctx, creds)
 		}(&results[i])
 	}
 	wg.Wait()

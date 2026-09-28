@@ -14,19 +14,20 @@ type jsonUsage struct {
 }
 
 type jsonAccount struct {
-	Label                string           `json:"label"`
-	Email                string           `json:"email,omitempty"`
-	Plan                 string           `json:"plan,omitempty"`
-	AccountID            string           `json:"chatgpt_account_id,omitempty"`
-	RateLimit            *jsonRateLimit   `json:"rate_limit,omitempty"`
-	CodeReviewRateLimit  *jsonRateLimit   `json:"code_review_rate_limit,omitempty"`
-	AdditionalRateLimits []jsonAdditional `json:"additional_rate_limits,omitempty"`
-	Credits              *jsonCredits     `json:"credits,omitempty"`
-	LimitReachedType     string           `json:"limit_reached_type,omitempty"`
-	SpendLimitReached    bool             `json:"spend_limit_reached,omitempty"`
-	NeedsRelogin         bool             `json:"needs_relogin,omitempty"`
-	Warning              string           `json:"warning,omitempty"`
-	Error                string           `json:"error,omitempty"`
+	Label                string            `json:"label"`
+	Email                string            `json:"email,omitempty"`
+	Plan                 string            `json:"plan,omitempty"`
+	AccountID            string            `json:"chatgpt_account_id,omitempty"`
+	RateLimit            *jsonRateLimit    `json:"rate_limit,omitempty"`
+	CodeReviewRateLimit  *jsonRateLimit    `json:"code_review_rate_limit,omitempty"`
+	AdditionalRateLimits []jsonAdditional  `json:"additional_rate_limits,omitempty"`
+	Credits              *jsonCredits      `json:"credits,omitempty"`
+	LimitReachedType     string            `json:"limit_reached_type,omitempty"`
+	SpendLimitReached    bool              `json:"spend_limit_reached,omitempty"`
+	ResetCredits         *jsonResetCredits `json:"rate_limit_reset_credits,omitempty"`
+	NeedsRelogin         bool              `json:"needs_relogin,omitempty"`
+	Warning              string            `json:"warning,omitempty"`
+	Error                string            `json:"error,omitempty"`
 }
 
 type jsonRateLimit struct {
@@ -47,6 +48,22 @@ type jsonAdditional struct {
 	Name           string         `json:"name"`
 	MeteredFeature string         `json:"metered_feature,omitempty"`
 	RateLimit      *jsonRateLimit `json:"rate_limit,omitempty"`
+}
+
+// jsonResetCredits lists usage limit resets; credits holds the redeemable
+// ones, soonest to expire first, when the account has any.
+type jsonResetCredits struct {
+	AvailableCount int64             `json:"available_count"`
+	Credits        []jsonResetCredit `json:"credits,omitempty"`
+}
+
+type jsonResetCredit struct {
+	ID          string `json:"id"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	ResetType   string `json:"reset_type,omitempty"`
+	GrantedAt   string `json:"granted_at,omitempty"`
+	ExpiresAt   string `json:"expires_at,omitempty"`
 }
 
 type jsonCredits struct {
@@ -93,6 +110,20 @@ func (e *env) usageJSON(results []result) jsonUsage {
 			}
 			if u.RateLimitReachedType != nil {
 				acct.LimitReachedType = u.RateLimitReachedType.Type
+			}
+			if u.RateLimitResetCredits != nil || r.resets != nil {
+				resets := &jsonResetCredits{AvailableCount: resetCount(r)}
+				for _, c := range r.resets.Available() {
+					resets.Credits = append(resets.Credits, jsonResetCredit{
+						ID:          c.ID,
+						Title:       c.Title,
+						Description: c.Description,
+						ResetType:   c.ResetType,
+						GrantedAt:   c.GrantedAt,
+						ExpiresAt:   c.ExpiresAt,
+					})
+				}
+				acct.ResetCredits = resets
 			}
 		}
 		out.Accounts = append(out.Accounts, acct)

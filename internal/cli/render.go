@@ -145,7 +145,7 @@ func (e *env) renderUsage(results []result, all bool) {
 		}
 		row := []cell{{text: r.account.Label}, {text: orDash(plan)}}
 		row = append(row, e.windowCells(limit, lengths, now)...)
-		t.rows = append(t.rows, append(row, e.notes(r, st)))
+		t.rows = append(t.rows, append(row, e.notes(r, st, now)))
 
 		if !all || r.usage == nil {
 			continue
@@ -194,13 +194,12 @@ func (e *env) windowCells(limit *usage.RateLimit, lengths []int64, now time.Time
 	return cells
 }
 
-func (e *env) notes(r result, st styles) cell {
+func (e *env) notes(r result, st styles, now time.Time) cell {
 	if r.err != nil {
 		return cell{text: r.err.Error(), style: st.bad}
 	}
 	var notes []string
-	style := st.dim
-	blocked := false
+	blocked, resetAvailable := false, false
 	if u := r.usage; u != nil {
 		if u.RateLimit.Blocked() {
 			reason := "limit reached"
@@ -214,6 +213,10 @@ func (e *env) notes(r result, st styles) cell {
 			notes = append(notes, "spend limit reached")
 			blocked = true
 		}
+		if n := resetCount(r); n > 0 {
+			notes = append(notes, e.resetNote(n, r.resets, now))
+			resetAvailable = true
+		}
 		if c := u.Credits; c != nil {
 			switch {
 			case c.Unlimited:
@@ -226,16 +229,52 @@ func (e *env) notes(r result, st styles) cell {
 			notes = append(notes, "no limits reported")
 		}
 	}
+	if r.warning != nil {
+		notes = append(notes, r.warning.Error())
+	}
+
+	style := st.dim
 	switch {
 	case blocked:
 		style = st.bad
 	case r.warning != nil:
 		style = st.warn
-	}
-	if r.warning != nil {
-		notes = append(notes, r.warning.Error())
+	case resetAvailable:
+		style = st.good
 	}
 	return cell{text: strings.Join(notes, "; "), style: style}
+}
+
+// resetCount is how many usage limit resets the account can redeem, preferring
+// the detailed list when it was fetched.
+func resetCount(r result) int64 {
+	if r.resets != nil {
+		return max(r.resets.AvailableCount, 0)
+	}
+	return r.usage.AvailableResets()
+}
+
+// resetNote describes available resets and when the first one expires.
+func (e *env) resetNote(count int64, resets *usage.ResetCredits, now time.Time) string {
+	noun := "usage limit resets"
+	if count == 1 {
+		noun = "usage limit reset"
+	}
+	text := fmt.Sprintf("%d %s available", count, noun)
+	if available := resets.Available(); len(available) > 0 {
+		if at, ok := available[0].Expiry(); ok {
+			prefix := "expires"
+			if count > 1 {
+				prefix = "first expires"
+			}
+			when := formatReset(now, at, e.Location)
+			if d := at.Sub(now); d > 0 && d < 24*time.Hour {
+				when = "in " + when
+			}
+			text += " (" + prefix + " " + when + ")"
+		}
+	}
+	return text
 }
 
 // formatReset shows a reset as a countdown within a day, else as a local time.

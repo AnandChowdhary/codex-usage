@@ -66,10 +66,12 @@ type backend struct {
 	revoked      []string
 	usage        map[string]string // access token → body; unknown tokens get 401
 	usageCalls   []http.Header
+	resets       map[string]string // access token → reset credits body; missing → 500
+	resetCalls   []string
 }
 
 func newBackend(t *testing.T) *backend {
-	b := &backend{t: t, refreshes: map[string]refreshReply{}, usage: map[string]string{}}
+	b := &backend{t: t, refreshes: map[string]refreshReply{}, usage: map[string]string{}, resets: map[string]string{}}
 	b.srv = httptest.NewServer(http.HandlerFunc(b.serve))
 	t.Cleanup(b.srv.Close)
 	return b
@@ -106,6 +108,15 @@ func (b *backend) serve(w http.ResponseWriter, r *http.Request) {
 		body, ok := b.usage[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
 		if !ok {
 			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		io.WriteString(w, body)
+	case "/backend-api/wham/rate-limit-reset-credits":
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		b.resetCalls = append(b.resetCalls, token)
+		body, ok := b.resets[token]
+		if !ok {
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		io.WriteString(w, body)
@@ -262,9 +273,19 @@ func TestUsageTable(t *testing.T) {
 	    "primary_window": {"used_percent": 100, "limit_window_seconds": 18000, "reset_after_seconds": 2280, "reset_at": 0},
 	    "secondary_window": {"used_percent": 88, "limit_window_seconds": 604800, "reset_at": ` + fmt.Sprint(testNow.Add(10*24*time.Hour).Unix()) + `}},
 	  "credits": {"has_credits": true, "unlimited": false, "balance": "4.20"},
+	  "rate_limit_reset_credits": {"available_count": 2, "applicable_available_count": 2},
 	  "additional_rate_limits": [{"limit_name": "Spark", "metered_feature": "spark",
 	    "rate_limit": {"allowed": true, "limit_reached": false,
 	      "primary_window": {"used_percent": 10, "limit_window_seconds": 3600, "reset_at": ` + fmt.Sprint(testNow.Add(30*time.Minute).Unix()) + `}}}]
+	}`
+
+	h.backend.resets[homeAccess] = `{
+	  "credits": [
+	    {"id": "later", "reset_type": "codex_rate_limits", "status": "available", "granted_at": "2026-09-20T00:00:00Z", "expires_at": "2026-10-01T12:00:00Z", "title": null, "description": null},
+	    {"id": "used", "reset_type": "codex_rate_limits", "status": "redeemed", "granted_at": "2026-09-20T00:00:00Z", "expires_at": "2026-09-28T13:00:00Z"},
+	    {"id": "soon", "reset_type": "codex_rate_limits", "status": "available", "granted_at": "2026-09-21T00:00:00Z", "expires_at": "2026-09-28T17:00:00Z", "title": "Full reset"}
+	  ],
+	  "available_count": 2, "total_earned_count": 3, "immediate_reset_purchase_eligible": false
 	}`
 
 	out, errOut, code := h.run()
@@ -274,7 +295,7 @@ func TestUsageTable(t *testing.T) {
 	want := strings.Join([]string{
 		"ACCOUNT  PLAN  5H LEFT  RESETS  WEEKLY LEFT  RESETS       NOTES",
 		"work     pro   -        -       81%          Thu 09:00",
-		"home     plus  0%       38m     12%          Oct 8 12:00  limit reached; credits: 4.20",
+		"home     plus  0%       38m     12%          Oct 8 12:00  limit reached; 2 usage limit resets available (first expires in 5h00m); credits: 4.20",
 		"",
 	}, "\n")
 	if out != want {
@@ -286,7 +307,7 @@ func TestUsageTable(t *testing.T) {
 		"ACCOUNT          PLAN  1H LEFT  RESETS  5H LEFT  RESETS  WEEKLY LEFT  RESETS       NOTES",
 		"work             pro   -        -       -        -       81%          Thu 09:00",
 		"  ↳ code review        -        -       -        -       50%          Thu 09:00",
-		"home             plus  -        -       0%       38m     12%          Oct 8 12:00  limit reached; credits: 4.20",
+		"home             plus  -        -       0%       38m     12%          Oct 8 12:00  limit reached; 2 usage limit resets available (first expires in 5h00m); credits: 4.20",
 		"  ↳ Spark              90%      30m     -        -       -            -",
 		"",
 	}, "\n")
@@ -305,6 +326,28 @@ func TestUsageTable(t *testing.T) {
 	}
 	if len(h.backend.refreshCalls) != 0 {
 		t.Errorf("refreshed fresh tokens: %v", h.backend.refreshCalls)
+	}
+	// Reset details are only fetched for accounts that have resets.
+	for _, token := range h.backend.resetCalls {
+		if token != homeAccess {
+			t.Errorf("fetched reset credits for an account without any")
+		}
+	}
+}
+
+func TestUsageResetsWithoutDetails(t *testing.T) {
+	h := newHarness(t)
+	access := accessToken(t, "work", testNow.Add(time.Hour))
+	h.seed(h.account("work", "work@acme.com", "plus", "ws-work", access, "rt"))
+	// The reset list fails (no h.backend.resets entry), so only the count shows.
+	h.backend.usage[access] = usageBody("plus", 10, 20, `, "rate_limit_reset_credits": {"available_count": 1}`)
+
+	out, _, code := h.run()
+	if code != 0 || !strings.Contains(out, "1 usage limit reset available\n") {
+		t.Fatalf("exit %d, output %q", code, out)
+	}
+	if len(h.backend.resetCalls) != 1 {
+		t.Fatalf("reset calls %v", h.backend.resetCalls)
 	}
 }
 
@@ -410,7 +453,8 @@ func TestUsageJSON(t *testing.T) {
 	h := newHarness(t)
 	access := accessToken(t, "work", testNow.Add(time.Hour))
 	h.seed(h.account("work", "work@acme.com", "pro", "ws-work", access, "rt"))
-	h.backend.usage[access] = usageBody("pro", 28, 59, `, "credits": {"has_credits": false, "unlimited": true}`)
+	h.backend.usage[access] = usageBody("pro", 28, 59, `, "credits": {"has_credits": false, "unlimited": true}, "rate_limit_reset_credits": {"available_count": 1}`)
+	h.backend.resets[access] = `{"credits": [{"id": "c1", "reset_type": "codex_rate_limits", "status": "available", "granted_at": "2026-09-20T00:00:00Z", "expires_at": null, "title": "Full reset"}], "available_count": 1}`
 
 	out, _, code := h.run("usage", "--json")
 	if code != 0 {
@@ -423,6 +467,9 @@ func TestUsageJSON(t *testing.T) {
 	a := got.Accounts[0]
 	if a.Label != "work" || a.Plan != "pro" || a.RateLimit == nil || len(a.RateLimit.Windows) != 2 || !a.Credits.Unlimited {
 		t.Fatalf("JSON account %+v", a)
+	}
+	if rc := a.ResetCredits; rc == nil || rc.AvailableCount != 1 || len(rc.Credits) != 1 || rc.Credits[0].ID != "c1" || rc.Credits[0].ExpiresAt != "" {
+		t.Fatalf("JSON reset credits %+v", a.ResetCredits)
 	}
 	w := a.RateLimit.Windows[0]
 	if w.Name != "5h" || w.LeftPercent != 72 || w.ResetsAt != "2026-09-28T14:13:00Z" {

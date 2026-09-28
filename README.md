@@ -14,7 +14,7 @@ limits side by side.
 $ codex-usage
 ACCOUNT         PLAN  5H LEFT  RESETS  WEEKLY LEFT  RESETS       NOTES
 work@acme.com   pro   -        -       81%          Mon 07:33
-me@example.com  plus  0%       38m     12%          Oct 8 12:00  limit reached; credits: 4.20
+me@example.com  plus  0%       38m     12%          Oct 8 12:00  limit reached; 1 usage limit reset available (expires in 5h00m)
 side@proton.me  plus  64%      4h02m   90%          Thu 18:10
 ```
 
@@ -104,7 +104,11 @@ Every command accepts `--config PATH` to use a different accounts file.
 - **RESETS** is a countdown when the reset is less than a day away, and a
   local date and time otherwise.
 - **NOTES** says when a limit or spend cap is reached, shows any credit
-  balance, and explains any account that couldn't be checked.
+  balance, and explains any account that couldn't be checked. It also shows
+  any **usage limit resets** the account has earned, and when the next one
+  expires. Resets are what Codex's `/usage` menu offers under "Redeem reset".
+  You can redeem one there or in ChatGPT to clear that account's current
+  limits.
 
 ### JSON
 
@@ -133,7 +137,19 @@ codex-usage --json | jq -r '.accounts[] | "\(.label): \([.rate_limit.windows[]? 
           }
         ]
       },
-      "credits": { "has_credits": false, "unlimited": false, "balance": "0" }
+      "credits": { "has_credits": false, "unlimited": false, "balance": "0" },
+      "rate_limit_reset_credits": {
+        "available_count": 1,
+        "credits": [
+          {
+            "id": "…",
+            "title": "Full reset",
+            "reset_type": "codex_rate_limits",
+            "granted_at": "2026-09-21T00:00:00Z",
+            "expires_at": "2026-09-28T17:00:00Z"
+          }
+        ]
+      }
     }
   ]
 }
@@ -166,7 +182,9 @@ sequenceDiagram
     CLI->>Auth: poll until approved, exchange for tokens
     Note over CLI: save account to accounts.json
     CLI->>API: GET /backend-api/wham/usage (per account, in parallel)
-    API-->>CLI: rate-limit windows, credits
+    API-->>CLI: rate-limit windows, credits, reset count
+    CLI->>API: GET /backend-api/wham/rate-limit-reset-credits (only if resets > 0)
+    API-->>CLI: reset list with expiry dates
 ```
 
 - **Refresh tokens are single-use.** A new token replaces the old one each
@@ -214,7 +232,7 @@ main.go              entry point
 internal/cli/        commands, table and JSON output
 internal/auth/       device-code login, token refresh and revocation, JWT claims
 internal/store/      accounts.json with atomic writes and cross-process locking
-internal/usage/      /wham/usage client and response types
+internal/usage/      /wham/usage and reset-credit client, response types
 ```
 
 ## Roadmap

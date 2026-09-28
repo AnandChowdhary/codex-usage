@@ -157,6 +157,33 @@ Response (fields we use):
   (e.g. per-model limits).
 - Notes show when a limit or spend control is reached, and any credit balance.
 
+### 4. Usage limit resets
+
+Accounts can earn "usage limit resets". Redeeming one clears the current
+limits; it's the "Redeem reset" item in Codex's `/usage` menu.
+
+- `/wham/usage` includes a summary:
+  `"rate_limit_reset_credits": {"available_count", "applicable_available_count"}`.
+  Codex only reads `available_count`, so we do the same.
+- If `available_count > 0`, also call
+  `GET {chatgpt}/wham/rate-limit-reset-credits`. It uses the same headers as
+  usage, and I verified it live with a device-code sign-in on 2026-09-28. It
+  returns:
+  `{"credits": [{"id", "reset_type", "status", "granted_at", "expires_at", "title", "description"}], "available_count", "total_earned_count", "immediate_reset_purchase_eligible", "history_enabled"}`.
+  - `status` is `available`, `redeeming` or `redeemed`.
+  - Timestamps are RFC 3339.
+  - `expires_at` is `null` if the credit never expires.
+  - `title` and `description` may be `null`. Codex falls back to "Full reset"
+    and "Reset your current usage limits".
+- Notes show `N usage limit reset(s) available (first expires …)`, using the
+  available credit that expires soonest. If the list request fails, only the
+  count is shown.
+- **Not implemented:** redeeming, with
+  `POST {chatgpt}/wham/rate-limit-reset-credits/consume`
+  `{"redeem_request_id": <uuid>, "credit_id"?}`. It spends a credit and can't
+  be undone, so it would need an explicit command with confirmation (see
+  TODO.md).
+
 ## Storage
 
 `$CODEX_USAGE_HOME` or `~/.codex-usage/accounts.json`. The directory is

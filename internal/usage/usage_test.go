@@ -117,3 +117,44 @@ func TestWindow(t *testing.T) {
 		t.Errorf("ResetTime with reset_at = %v", got)
 	}
 }
+
+func TestFetchResetCredits(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wham/rate-limit-reset-credits" || r.Header.Get("ChatGPT-Account-Id") != "acct" {
+			t.Errorf("request %s %v", r.URL.Path, r.Header)
+		}
+		io.WriteString(w, `{
+		  "credits": [
+		    {"id": "never", "status": "available", "granted_at": "2026-09-01T00:00:00Z", "expires_at": null},
+		    {"id": "late", "status": "available", "granted_at": "2026-09-01T00:00:00Z", "expires_at": "2026-10-09T00:00:00+00:00"},
+		    {"id": "gone", "status": "redeemed", "granted_at": "2026-09-01T00:00:00Z", "expires_at": "2026-09-02T00:00:00Z"},
+		    {"id": "early", "status": "available", "granted_at": "2026-09-01T00:00:00Z", "expires_at": "2026-10-01T00:00:00.5Z"}
+		  ],
+		  "available_count": 3, "total_earned_count": 4,
+		  "immediate_reset_purchase_eligible": false, "history_enabled": true
+		}`)
+	}))
+	defer srv.Close()
+	got, err := NewClient(srv.URL, srv.Client(), "").FetchResetCredits(context.Background(), Credentials{AccessToken: "a", AccountID: "acct"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AvailableCount != 3 || got.TotalEarnedCount != 4 {
+		t.Fatalf("counts %+v", got)
+	}
+	var ids []string
+	for _, c := range got.Available() {
+		ids = append(ids, c.ID)
+	}
+	if strings.Join(ids, ",") != "early,late,never" {
+		t.Fatalf("Available() order %v", ids)
+	}
+	if _, ok := got.Credits[0].Expiry(); ok {
+		t.Fatal("null expires_at parsed as an expiry")
+	}
+
+	var none *ResetCredits
+	if none.Available() != nil || (*Response)(nil).AvailableResets() != 0 {
+		t.Fatal("nil receivers should be empty")
+	}
+}

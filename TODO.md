@@ -12,3 +12,7 @@
 
 - [ ] `rename <label> <new-label>`, so a label can change without signing in again.
 - [ ] `usage <label|email>…` to check only some accounts.
+- [ ] `redeem <label|email>` to use an available usage limit reset, via
+      `POST /wham/rate-limit-reset-credits/consume`. It spends a credit and
+      can't be undone, so it needs a confirmation prompt and an idempotency
+      key (see the spec).

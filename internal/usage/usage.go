@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -90,13 +91,93 @@ type Response struct {
 	RateLimitReachedType *struct {
 		Type string `json:"type"`
 	} `json:"rate_limit_reached_type"`
+	RateLimitResetCredits *struct {
+		AvailableCount int64 `json:"available_count"`
+	} `json:"rate_limit_reset_credits"`
+}
+
+// AvailableResets is the number of usage limit resets the account can redeem.
+func (r *Response) AvailableResets() int64 {
+	if r == nil || r.RateLimitResetCredits == nil {
+		return 0
+	}
+	return max(r.RateLimitResetCredits.AvailableCount, 0)
+}
+
+// ResetCredits is the list of usage limit resets from
+// /wham/rate-limit-reset-credits. Redeeming one clears the current limits.
+type ResetCredits struct {
+	Credits          []ResetCredit `json:"credits"`
+	AvailableCount   int64         `json:"available_count"`
+	TotalEarnedCount int64         `json:"total_earned_count"`
+}
+
+// ResetCredit is one earned usage limit reset.
+type ResetCredit struct {
+	ID          string `json:"id"`
+	ResetType   string `json:"reset_type"`
+	Status      string `json:"status"` // available, redeeming or redeemed
+	GrantedAt   string `json:"granted_at"`
+	ExpiresAt   string `json:"expires_at"` // RFC 3339; empty if it never expires
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+// Expiry is when the credit expires, if it does.
+func (c ResetCredit) Expiry() (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339Nano, c.ExpiresAt)
+	return t, err == nil
+}
+
+// Available returns the redeemable credits, soonest to expire first.
+func (r *ResetCredits) Available() []ResetCredit {
+	if r == nil {
+		return nil
+	}
+	var out []ResetCredit
+	for _, c := range r.Credits {
+		if c.Status == "available" {
+			out = append(out, c)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b ResetCredit) int {
+		ta, okA := a.Expiry()
+		tb, okB := b.Expiry()
+		switch {
+		case okA && okB:
+			return ta.Compare(tb)
+		case okA:
+			return -1
+		case okB:
+			return 1
+		}
+		return 0
+	})
+	return out
 }
 
 // Fetch returns the current usage for one workspace.
 func (c *Client) Fetch(ctx context.Context, creds Credentials) (*Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/wham/usage", nil)
-	if err != nil {
+	var out Response
+	if err := c.get(ctx, "/wham/usage", creds, "usage", &out); err != nil {
 		return nil, err
+	}
+	return &out, nil
+}
+
+// FetchResetCredits lists the usage limit resets a workspace has earned.
+func (c *Client) FetchResetCredits(ctx context.Context, creds Credentials) (*ResetCredits, error) {
+	var out ResetCredits
+	if err := c.get(ctx, "/wham/rate-limit-reset-credits", creds, "usage limit resets", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) get(ctx context.Context, path string, creds Credentials, what string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+	if err != nil {
+		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+creds.AccessToken)
 	req.Header.Set("Accept", "application/json")
@@ -112,24 +193,23 @@ func (c *Client) Fetch(ctx context.Context, creds Credentials) (*Response, error
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching usage: %w", err)
+		return fmt.Errorf("fetching %s: %w", what, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("fetching usage: %w", err)
+		return fmt.Errorf("fetching %s: %w", what, err)
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, ErrUnauthorized
+		return ErrUnauthorized
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("fetching usage: HTTP %d: %s", resp.StatusCode, snippet(body))
+		return fmt.Errorf("fetching %s: HTTP %d: %s", what, resp.StatusCode, snippet(body))
 	}
-	var out Response
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, fmt.Errorf("decoding usage: %w", err)
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("decoding %s: %w", what, err)
 	}
-	return &out, nil
+	return nil
 }
 
 // LeftPercent is the share of the window still available, clamped to 0–100.
