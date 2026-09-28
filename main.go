@@ -2,44 +2,26 @@
 package main
 
 import (
-	"flag"
-	"fmt"
-	"io"
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/AnandChowdhary/codex-usage/internal/cli"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
-}
-
-func run(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("codex-usage", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: codex-usage [flags]")
-		fmt.Fprintln(stderr)
-		fmt.Fprintln(stderr, "Report usage across your Codex subscription accounts.")
-		fmt.Fprintln(stderr)
-		fmt.Fprintln(stderr, "Flags:")
-		fs.PrintDefaults()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	app := &cli.App{
+		Version: version,
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
+		Color:   cli.ColorEnabled(os.Stdout),
 	}
-	showVersion := fs.Bool("version", false, "print version and exit")
-
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
-			return 0
-		}
-		return 2
-	}
-
-	if *showVersion {
-		fmt.Fprintln(stdout, version)
-		return 0
-	}
-
-	fs.Usage()
-	return 0
+	code := app.Run(ctx, os.Args[1:])
+	stop()
+	os.Exit(code)
 }

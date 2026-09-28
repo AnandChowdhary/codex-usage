@@ -1,6 +1,6 @@
 # codex-usage — spec
 
-Status: draft · 2026-09-28
+Status: v1 implemented · 2026-09-28
 
 ## Goal
 
@@ -24,7 +24,7 @@ side@proton.me       plus   -        -          -            -             re-lo
   second would get `refresh_token_reused` and be logged out. Every account
   here gets its own device-code session.
 - API-key accounts. Usage limits only apply to ChatGPT-plan logins.
-- OS keychain storage. It's a possible follow-up; v1 matches Codex's
+- OS keychain storage. Planned for v2 (see `TODO.md`); v1 matches Codex's
   plaintext `auth.json` model.
 
 ## Commands
@@ -32,7 +32,7 @@ side@proton.me       plus   -        -          -            -             re-lo
 | Command | Behaviour |
 |---|---|
 | `codex-usage` / `codex-usage usage` | Fetch usage for all stored accounts concurrently and print a table. `--json` prints raw, normalized JSON. Exits non-zero if any account failed. |
-| `codex-usage login [--label NAME]` | Run the device-code flow, then add or update the account. The label defaults to the email. |
+| `codex-usage login [--label NAME] [--open]` | Run the device-code flow, then add or update the account. The label defaults to the email. `--open` also launches the browser. |
 | `codex-usage accounts` | List stored accounts (label, email, plan, workspace, last refresh). No network calls. |
 | `codex-usage logout <label\|email>` | Revoke the refresh token (best effort) and remove the account. |
 | `codex-usage --version` | Print the version. |
@@ -219,5 +219,5 @@ internal/usage/          /wham/usage client + response types + window labeling
   clear error for the 404.
 - **Cloudflare** could start challenging non-browser clients on chatgpt.com.
   An unauthenticated request currently gets a clean 401, which is fine.
-- Should `login` offer to open the browser automatically (`open` /
-  `xdg-open`)? Proposed: print a URL by default, with an `--open` flag.
+- ~~Should `login` open the browser automatically?~~ Decided: print the URL
+  by default; `--open` also launches the browser.
