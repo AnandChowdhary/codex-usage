@@ -68,6 +68,9 @@ type backend struct {
 	usageCalls   []http.Header
 	resets       map[string]string // access token → reset credits body; missing → 500
 	resetCalls   []string
+	redeemCalls  []map[string]string
+	redeemReply  []refreshReply // replies in order; the last one repeats
+	onRedeem     func()         // runs (under lock) after a successful redeem
 }
 
 func newBackend(t *testing.T) *backend {
@@ -111,6 +114,19 @@ func (b *backend) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		io.WriteString(w, body)
+	case "/backend-api/wham/rate-limit-reset-credits/consume":
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		b.redeemCalls = append(b.redeemCalls, body)
+		reply := refreshReply{200, `{"code":"reset","windows_reset":1}`}
+		if n := len(b.redeemReply); n > 0 {
+			reply = b.redeemReply[min(len(b.redeemCalls), n)-1]
+		}
+		w.WriteHeader(reply.status)
+		io.WriteString(w, reply.body)
+		if reply.status == 200 && b.onRedeem != nil {
+			b.onRedeem()
+		}
 	case "/backend-api/wham/rate-limit-reset-credits":
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		b.resetCalls = append(b.resetCalls, token)
@@ -142,6 +158,7 @@ type harness struct {
 	backend *backend
 	path    string
 	opened  []string
+	stdin   string
 }
 
 func newHarness(t *testing.T) *harness {
@@ -152,6 +169,7 @@ func (h *harness) run(args ...string) (stdout, stderr string, code int) {
 	var out, errOut bytes.Buffer
 	app := &App{
 		Version: "test",
+		Stdin:   strings.NewReader(h.stdin),
 		Stdout:  &out,
 		Stderr:  &errOut,
 		Getenv: func(k string) string {

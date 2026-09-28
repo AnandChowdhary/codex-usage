@@ -58,7 +58,7 @@ func (a *App) runUsage(ctx context.Context, args []string) error {
 		return err
 	}
 
-	results, err := e.collect(ctx)
+	results, err := e.collect(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -81,15 +81,29 @@ func (a *App) runUsage(ctx context.Context, args []string) error {
 	return nil
 }
 
-// collect refreshes stale sign-ins and fetches usage for every account.
-func (e *env) collect(ctx context.Context) ([]result, error) {
+// collect refreshes stale sign-ins and fetches usage for the accounts that
+// include accepts, or every account if include is nil.
+func (e *env) collect(ctx context.Context, include func(store.Account) bool) ([]result, error) {
+	selected := func(f *store.File) []store.Account {
+		if include == nil {
+			return f.Accounts
+		}
+		var out []store.Account
+		for _, acct := range f.Accounts {
+			if include(acct) {
+				out = append(out, acct)
+			}
+		}
+		return out
+	}
+
 	f, err := e.store.Load()
 	if err != nil {
 		return nil, err
 	}
 	now := e.Now()
 	stale := map[string]string{}
-	for _, acct := range f.Accounts {
+	for _, acct := range selected(f) {
 		if !acct.NeedsRelogin && needsRefresh(acct, now) {
 			stale[acct.Key()] = acct.Tokens.AccessToken
 		}
@@ -101,9 +115,10 @@ func (e *env) collect(ctx context.Context) ([]result, error) {
 		}
 	}
 
-	results := make([]result, len(f.Accounts))
+	accounts := selected(f)
+	results := make([]result, len(accounts))
 	var todo []int
-	for i, acct := range f.Accounts {
+	for i, acct := range accounts {
 		results[i].account = acct
 		if acct.NeedsRelogin {
 			results[i].err = &reloginError{cause: refreshErrs[acct.Key()]}

@@ -200,22 +200,31 @@ func (e *env) removeAccount(ctx context.Context, query string) (store.Account, e
 	if err != nil {
 		return store.Account{}, err
 	}
+	i, err := resolveAccount(f, query)
+	if err != nil {
+		return store.Account{}, err
+	}
+	removed := f.Accounts[i]
+	f.Remove(i)
+	if err := e.store.Save(f); err != nil {
+		return store.Account{}, err
+	}
+	return removed, nil
+}
+
+// resolveAccount finds the one account a label or email refers to.
+func resolveAccount(f *store.File, query string) (int, error) {
 	matches := f.Find(query)
 	switch len(matches) {
 	case 0:
-		return store.Account{}, fmt.Errorf("no account matches %q; see `codex-usage accounts`", query)
+		return 0, fmt.Errorf("no account matches %q; see `codex-usage accounts`", query)
 	case 1:
+		return matches[0], nil
 	default:
 		var labels []string
 		for _, i := range matches {
 			labels = append(labels, f.Accounts[i].Label)
 		}
-		return store.Account{}, fmt.Errorf("%q matches several accounts (%s); pass a label instead", query, joinQuoted(labels))
+		return 0, fmt.Errorf("%q matches several accounts (%s); pass a label instead", query, joinQuoted(labels))
 	}
-	removed := f.Accounts[matches[0]]
-	f.Remove(matches[0])
-	if err := e.store.Save(f); err != nil {
-		return store.Account{}, err
-	}
-	return removed, nil
 }

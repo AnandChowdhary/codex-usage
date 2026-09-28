@@ -17,6 +17,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	app := &cli.App{
 		Version: version,
+		Stdin:   os.Stdin,
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
 		Color:   cli.ColorEnabled(os.Stdout),

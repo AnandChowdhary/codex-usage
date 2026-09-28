@@ -2,6 +2,7 @@
 package usage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -156,10 +157,21 @@ func (r *ResetCredits) Available() []ResetCredit {
 	return out
 }
 
+// StatusError is an unexpected HTTP status from the backend.
+type StatusError struct {
+	Action string
+	Status int
+	Body   string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("%s: HTTP %d: %s", e.Action, e.Status, e.Body)
+}
+
 // Fetch returns the current usage for one workspace.
 func (c *Client) Fetch(ctx context.Context, creds Credentials) (*Response, error) {
 	var out Response
-	if err := c.get(ctx, "/wham/usage", creds, "usage", &out); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/wham/usage", creds, nil, "fetching usage", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -168,19 +180,62 @@ func (c *Client) Fetch(ctx context.Context, creds Credentials) (*Response, error
 // FetchResetCredits lists the usage limit resets a workspace has earned.
 func (c *Client) FetchResetCredits(ctx context.Context, creds Credentials) (*ResetCredits, error) {
 	var out ResetCredits
-	if err := c.get(ctx, "/wham/rate-limit-reset-credits", creds, "usage limit resets", &out); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/wham/rate-limit-reset-credits", creds, nil, "fetching usage limit resets", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
-func (c *Client) get(ctx context.Context, path string, creds Credentials, what string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+// Outcomes of redeeming a usage limit reset.
+const (
+	RedeemReset           = "reset"
+	RedeemNothingToReset  = "nothing_to_reset"
+	RedeemNoCredit        = "no_credit"
+	RedeemAlreadyRedeemed = "already_redeemed"
+)
+
+// RedeemResult is the outcome of redeeming a usage limit reset.
+type RedeemResult struct {
+	Code         string `json:"code"`
+	WindowsReset int64  `json:"windows_reset"`
+}
+
+// Redeem spends a usage limit reset, clearing the workspace's current
+// limits. requestID is an idempotency key: retrying with the same ID never
+// spends a second reset. An empty creditID lets the server pick the reset.
+func (c *Client) Redeem(ctx context.Context, creds Credentials, requestID, creditID string) (*RedeemResult, error) {
+	body := map[string]string{"redeem_request_id": requestID}
+	if creditID != "" {
+		body["credit_id"] = creditID
+	}
+	var out RedeemResult
+	if err := c.do(ctx, http.MethodPost, "/wham/rate-limit-reset-credits/consume", creds, body, "redeeming usage limit reset", &out); err != nil {
+		return nil, err
+	}
+	if out.Code == "" {
+		return nil, errors.New("redeeming usage limit reset: response has no outcome code")
+	}
+	return &out, nil
+}
+
+func (c *Client) do(ctx context.Context, method, path string, creds Credentials, payload any, action string, out any) error {
+	var reqBody io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		reqBody = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reqBody)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+creds.AccessToken)
 	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if creds.AccountID != "" {
 		req.Header.Set("ChatGPT-Account-Id", creds.AccountID)
 	}
@@ -193,21 +248,21 @@ func (c *Client) get(ctx context.Context, path string, creds Credentials, what s
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("fetching %s: %w", what, err)
+		return fmt.Errorf("%s: %w", action, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
-		return fmt.Errorf("fetching %s: %w", what, err)
+		return fmt.Errorf("%s: %w", action, err)
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		return ErrUnauthorized
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("fetching %s: HTTP %d: %s", what, resp.StatusCode, snippet(body))
+		return &StatusError{Action: action, Status: resp.StatusCode, Body: snippet(body)}
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("decoding %s: %w", what, err)
+		return fmt.Errorf("%s: decoding response: %w", action, err)
 	}
 	return nil
 }

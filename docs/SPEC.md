@@ -34,6 +34,7 @@ side@proton.me       plus   -        -          -            -             re-lo
 | `codex-usage` / `codex-usage usage` | Fetch usage for all stored accounts concurrently and print a table. `--json` prints raw, normalized JSON. Exits non-zero if any account failed. |
 | `codex-usage login [--label NAME] [--open]` | Run the device-code flow, then add or update the account. The label defaults to the email. `--open` also launches the browser. |
 | `codex-usage accounts` | List stored accounts (label, email, plan, workspace, last refresh). No network calls. |
+| `codex-usage redeem <label\|email> [--credit ID] [--yes]` | Use a usage limit reset after confirming (see §4). |
 | `codex-usage logout <label\|email>` | Revoke the refresh token (best effort) and remove the account. |
 | `codex-usage --version` | Print the version. |
 
@@ -178,11 +179,19 @@ limits; it's the "Redeem reset" item in Codex's `/usage` menu.
 - Notes show `N usage limit reset(s) available (first expires …)`, using the
   available credit that expires soonest. If the list request fails, only the
   count is shown.
-- **Not implemented:** redeeming, with
+- **Redeeming** (`codex-usage redeem <account> [--credit ID] [--yes]`):
   `POST {chatgpt}/wham/rate-limit-reset-credits/consume`
-  `{"redeem_request_id": <uuid>, "credit_id"?}`. It spends a credit and can't
-  be undone, so it would need an explicit command with confirmation (see
-  TODO.md).
+  `{"redeem_request_id": <uuid v4>, "credit_id"?}` →
+  `{"code": "reset" | "nothing_to_reset" | "no_credit" | "already_redeemed", "windows_reset": n}`.
+  - `redeem_request_id` is an idempotency key. Retry network errors, 429 and
+    5xx (up to 3 tries) with the **same** ID. If every try fails, say the
+    outcome is unknown.
+  - `reset` and `already_redeemed` (a retry of a request that went through)
+    both mean success, as in Codex.
+  - `nothing_to_reset` means usage doesn't need a reset. `no_credit` means
+    the chosen reset (or any reset) isn't available.
+  - Default to the available reset that expires first. Always ask for
+    confirmation unless `--yes` is passed. Show usage again afterwards.
 
 ## Storage
 

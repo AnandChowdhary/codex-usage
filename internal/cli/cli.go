@@ -32,6 +32,7 @@ Usage:
   codex-usage [usage] [--json] [--all]       Show usage for every account (default)
   codex-usage login [--label NAME] [--open]  Sign in to an account with a device code
   codex-usage accounts [--json]              List signed-in accounts
+  codex-usage redeem <label|email> [--yes]   Use a usage limit reset on an account
   codex-usage logout <label|email>           Sign out and forget an account
   codex-usage version                        Print the version
 
@@ -42,6 +43,7 @@ Every command accepts --config PATH to use another accounts file
 // App holds the process environment; zero fields get working defaults.
 type App struct {
 	Version     string
+	Stdin       io.Reader
 	Stdout      io.Writer
 	Stderr      io.Writer
 	Getenv      func(string) string
@@ -64,6 +66,9 @@ func ColorEnabled(f *os.File) bool {
 func (a *App) setDefaults() {
 	if a.Version == "" {
 		a.Version = "dev"
+	}
+	if a.Stdin == nil {
+		a.Stdin = strings.NewReader("")
 	}
 	if a.Stdout == nil {
 		a.Stdout = io.Discard
@@ -119,6 +124,8 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		err = a.runAccounts(args)
 	case "logout":
 		err = a.runLogout(ctx, args)
+	case "redeem":
+		err = a.runRedeem(ctx, args)
 	default:
 		fmt.Fprintf(a.Stderr, "codex-usage: unknown command %q\n\n%s", cmd, helpText)
 		return 2

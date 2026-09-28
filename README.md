@@ -23,6 +23,8 @@ side@proton.me  plus  64%      4h02m   90%          Thu 18:10
   a code, done. This tool never sees your password, and there are no API keys.
 - **Doesn't touch your Codex login.** Every account gets its own session, and
   `~/.codex/auth.json` is never read or changed.
+- **Usage limit resets.** It shows which accounts have earned resets and when
+  they expire. `codex-usage redeem` uses one without opening Codex.
 - **Fast.** All accounts are checked in parallel, and expiring sign-ins are
   renewed automatically.
 - **Scriptable.** `--json` output and meaningful exit codes.
@@ -88,6 +90,7 @@ codex-usage
 | `codex-usage login --label work` | Give the account a short name. The default is its email. |
 | `codex-usage login --open` | Also open the sign-in page in your browser. |
 | `codex-usage accounts` | List signed-in accounts and whether they're still valid. Add `--json` for JSON. |
+| `codex-usage redeem <label\|email>` | Use one of the account's usage limit resets, after confirming. See [Usage limit resets](#usage-limit-resets). |
 | `codex-usage logout <label\|email>` | End an account's session and remove it. |
 | `codex-usage version` | Print the version. |
 
@@ -105,10 +108,36 @@ Every command accepts `--config PATH` to use a different accounts file.
   local date and time otherwise.
 - **NOTES** says when a limit or spend cap is reached, shows any credit
   balance, and explains any account that couldn't be checked. It also shows
-  any **usage limit resets** the account has earned, and when the next one
-  expires. Resets are what Codex's `/usage` menu offers under "Redeem reset".
-  You can redeem one there or in ChatGPT to clear that account's current
-  limits.
+  any [usage limit resets](#usage-limit-resets) the account has earned, and
+  when the next one expires.
+
+### Usage limit resets
+
+Some accounts earn **usage limit resets**. Using one clears the account's
+current usage limits straight away. It's the same as "Redeem reset" in Codex's
+`/usage` menu. `codex-usage` shows available resets in NOTES, and `redeem`
+uses one:
+
+```
+$ codex-usage redeem work
+work@acme.com (plus)
+  5h        0% left, resets in 2h13m
+  weekly   40% left, resets Thu 09:00
+  2 usage limit resets available (first expires in 21h00m)
+
+Use a usage limit reset on work? This clears its current usage limits and can't be undone. [y/N] y
+✓ Usage limits reset for work (2 windows).
+  5h      100% left, resets in 2h13m
+  weekly  100% left, resets Thu 09:00
+```
+
+- By default it uses the reset that expires first. To pick a different one,
+  pass `--credit ID`; the IDs are in `codex-usage --json`.
+- It always asks first. `--yes` skips the question, e.g. in scripts.
+- A reset can't be undone. Each attempt sends a unique request ID, and retries
+  after network errors reuse it, so one command never spends two resets.
+- If the account's usage doesn't need a reset, ChatGPT says so and the
+  command exits with status 1.
 
 ### JSON
 
@@ -160,7 +189,7 @@ codex-usage --json | jq -r '.accounts[] | "\(.label): \([.rate_limit.windows[]? 
 | Code | Meaning |
 |---|---|
 | `0` | Every account was checked. |
-| `1` | At least one account couldn't be checked (e.g. it needs to sign in again), or the command failed. |
+| `1` | At least one account couldn't be checked (e.g. it needs to sign in again), a reset couldn't be redeemed, or the command failed. |
 | `2` | Invalid command or flags. |
 | `130` | Interrupted. |
 
@@ -185,6 +214,10 @@ sequenceDiagram
     API-->>CLI: rate-limit windows, credits, reset count
     CLI->>API: GET /backend-api/wham/rate-limit-reset-credits (only if resets > 0)
     API-->>CLI: reset list with expiry dates
+    opt codex-usage redeem
+        CLI->>API: POST /backend-api/wham/rate-limit-reset-credits/consume
+        API-->>CLI: reset / nothing_to_reset / no_credit
+    end
 ```
 
 - **Refresh tokens are single-use.** A new token replaces the old one each
@@ -232,7 +265,7 @@ main.go              entry point
 internal/cli/        commands, table and JSON output
 internal/auth/       device-code login, token refresh and revocation, JWT claims
 internal/store/      accounts.json with atomic writes and cross-process locking
-internal/usage/      /wham/usage and reset-credit client, response types
+internal/usage/      /wham/usage and usage limit reset client, response types
 ```
 
 ## Roadmap

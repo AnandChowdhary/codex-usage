@@ -267,11 +267,7 @@ func (e *env) resetNote(count int64, resets *usage.ResetCredits, now time.Time) 
 			if count > 1 {
 				prefix = "first expires"
 			}
-			when := formatReset(now, at, e.Location)
-			if d := at.Sub(now); d > 0 && d < 24*time.Hour {
-				when = "in " + when
-			}
-			text += " (" + prefix + " " + when + ")"
+			text += " (" + prefix + " " + formatWhen(now, at, e.Location) + ")"
 		}
 	}
 	return text
@@ -294,6 +290,15 @@ func formatReset(now, at time.Time, loc *time.Location) string {
 	default:
 		return at.In(loc).Format("Jan 2 15:04")
 	}
+}
+
+// formatWhen is formatReset for use in a sentence: "in 38m" or "Thu 09:00".
+func formatWhen(now, at time.Time, loc *time.Location) string {
+	when := formatReset(now, at, loc)
+	if d := at.Sub(now); d > 0 && d < 24*time.Hour {
+		return "in " + when
+	}
+	return when
 }
 
 func formatAgo(now, t time.Time) string {
