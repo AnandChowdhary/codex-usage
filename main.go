@@ -5,18 +5,20 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"strings"
 	"syscall"
 
 	"github.com/AnandChowdhary/codex-usage/internal/cli"
 )
 
-// version is overridden at build time with -ldflags "-X main.version=...".
+// version is set by release builds with -ldflags "-X main.version=...".
 var version = "dev"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	app := &cli.App{
-		Version: version,
+		Version: buildVersion(),
 		Stdin:   os.Stdin,
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
@@ -25,4 +27,16 @@ func main() {
 	code := app.Run(ctx, os.Args[1:])
 	stop()
 	os.Exit(code)
+}
+
+// buildVersion falls back to the module version Go records for
+// `go install ...@v1.2.3` and builds from a tagged checkout.
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return strings.TrimPrefix(info.Main.Version, "v")
+	}
+	return version
 }
