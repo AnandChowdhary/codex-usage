@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/AnandChowdhary/codex-usage/actions/workflows/ci.yml/badge.svg)](https://github.com/AnandChowdhary/codex-usage/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/AnandChowdhary/codex-usage.svg)](https://pkg.go.dev/github.com/AnandChowdhary/codex-usage)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **See how much Codex usage is left across all your ChatGPT accounts, in one command.**
 
@@ -354,6 +355,10 @@ internal/usage/      /wham/usage and usage limit reset client, response types
 ## Roadmap
 
 See [TODO.md](TODO.md).
+
+## License
+
+[MIT](LICENSE) © Anand Chowdhary
 
 ---
 
